@@ -32,4 +32,4 @@ go test ./...
 
 ## License
 
-See [LICENSE](LICENSE) for details.
+The license for this project has not yet been finalized.

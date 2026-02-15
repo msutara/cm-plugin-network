@@ -32,9 +32,10 @@ This plugin does **not**:
 
 ## 4. Integration
 
-- Implements the `plugin.Plugin` interface from
-  `github.com/msutara/config-manager-core/plugin`.
-- Registers itself via `init()` by calling `plugin.Register()`.
+- Implements the `pluginiface.Plugin` interface (local copy of the core
+  `plugin.Plugin` interface for independent development).
+- Registration with the core is handled externally (e.g., by the host
+  application importing the plugin and calling a registration function).
 - Routes are mounted by the core under `/api/v1/plugins/network`.
 - Imported in `cmd/cm/main.go` with a blank import:
   `import _ "github.com/msutara/cm-plugin-network"`

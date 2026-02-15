@@ -3,9 +3,16 @@ package network
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
 
 	"github.com/go-chi/chi/v5"
 )
+
+// maxBodySize limits JSON request bodies to 1 MB.
+const maxBodySize = 1 << 20
+
+// validName matches safe interface names (alphanumeric, hyphens, underscores).
+var validName = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 func newRouter() http.Handler {
 	r := chi.NewRouter()
@@ -31,6 +38,10 @@ func handleListInterfaces(w http.ResponseWriter, r *http.Request) {
 
 func handleGetInterface(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
+	if !validName.MatchString(name) {
+		writeError(w, http.StatusBadRequest, "invalid interface name")
+		return
+	}
 	iface, err := GetInterface(name)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
@@ -41,7 +52,12 @@ func handleGetInterface(w http.ResponseWriter, r *http.Request) {
 
 func handleSetStaticIP(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
+	if !validName.MatchString(name) {
+		writeError(w, http.StatusBadRequest, "invalid interface name")
+		return
+	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 	var req StaticIPRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -66,6 +82,7 @@ func handleGetDNS(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleSetDNS(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 	var req DNSConfig
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
