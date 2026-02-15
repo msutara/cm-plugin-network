@@ -5,15 +5,14 @@ package network
 import (
 	"net/http"
 
-	"github.com/msutara/config-manager-core/plugin"
+	"github.com/msutara/cm-plugin-network/pluginiface"
 )
 
-// NetworkPlugin implements the plugin.Plugin interface for network management.
-type NetworkPlugin struct{}
+// Compile-time check: NetworkPlugin must implement pluginiface.Plugin.
+var _ pluginiface.Plugin = (*NetworkPlugin)(nil)
 
-func init() {
-	plugin.Register(&NetworkPlugin{})
-}
+// NetworkPlugin implements the pluginiface.Plugin interface for network management.
+type NetworkPlugin struct{}
 
 func (p *NetworkPlugin) Name() string        { return "network" }
 func (p *NetworkPlugin) Version() string     { return "0.1.0" }
@@ -23,6 +22,6 @@ func (p *NetworkPlugin) Routes() http.Handler {
 	return newRouter()
 }
 
-func (p *NetworkPlugin) ScheduledJobs() []plugin.JobDefinition {
+func (p *NetworkPlugin) ScheduledJobs() []pluginiface.JobDefinition {
 	return nil
 }
