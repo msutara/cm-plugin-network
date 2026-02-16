@@ -1,8 +1,9 @@
 # CM Plugin Network
 
 Config Manager plugin for network interface configuration on headless
-Debian-based nodes. Implements the `plugin.Plugin` interface from
-[config-manager-core](https://github.com/msutara/config-manager-core).
+Debian-based nodes. Implements a local `pluginiface.Plugin` interface that
+mirrors the core's [`plugin.Plugin`](https://github.com/msutara/config-manager-core)
+contract for independent development.
 
 ## Features
 

@@ -2,12 +2,17 @@
 
 ## Overview
 
-The network plugin is compiled into Config Manager via a blank import in
-`cmd/cm/main.go`:
+The network plugin is integrated into Config Manager by importing it and
+registering the plugin with the core's plugin registry. In `cmd/cm/main.go`:
 
 ```go
 import _ "github.com/msutara/cm-plugin-network"
 ```
+
+> **Note:** In Phase 1, the plugin uses a local `pluginiface` package that
+> mirrors the core's `plugin.Plugin` interface for independent development.
+> The blank import pattern above describes the intended end-state when full
+> integration with the core is wired.
 
 Once loaded, its routes are available under `/api/v1/plugins/network`.
 

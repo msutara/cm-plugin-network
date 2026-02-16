@@ -38,7 +38,7 @@ func ListInterfaces() ([]Interface, error) {
 // GetInterface returns details for a single network interface.
 func GetInterface(name string) (*Interface, error) {
 	// TODO: implement lookup by interface name
-	return nil, fmt.Errorf("interface %q not found", name)
+	return nil, fmt.Errorf("not implemented")
 }
 
 // SetStaticIP configures a static IP address on the named interface.
