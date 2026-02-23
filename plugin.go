@@ -14,9 +14,17 @@ var _ pluginiface.Plugin = (*NetworkPlugin)(nil)
 // NetworkPlugin implements the pluginiface.Plugin interface for network management.
 type NetworkPlugin struct{}
 
-func (p *NetworkPlugin) Name() string        { return "network" }
-func (p *NetworkPlugin) Version() string     { return "0.1.0" }
-func (p *NetworkPlugin) Description() string { return "Network interface configuration" }
+func (p *NetworkPlugin) Name() string {
+	return "network"
+}
+
+func (p *NetworkPlugin) Version() string {
+	return "0.1.0"
+}
+
+func (p *NetworkPlugin) Description() string {
+	return "Network interface configuration"
+}
 
 func (p *NetworkPlugin) Routes() http.Handler {
 	return newRouter()
