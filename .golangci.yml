@@ -1,6 +1,7 @@
 linters:
   enable:
     - errcheck
+    - gofumpt
     - gosimple
     - govet
     - ineffassign
