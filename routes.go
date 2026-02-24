@@ -2,6 +2,7 @@ package network
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -15,21 +16,27 @@ const maxBodySize = 1 << 20
 // validName matches safe interface names (alphanumeric, hyphens, underscores).
 var validName = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
-func newRouter() http.Handler {
+func newRouter(svc *Service) http.Handler {
 	r := chi.NewRouter()
+	h := &handler{svc: svc}
 
-	r.Get("/interfaces", handleListInterfaces)
-	r.Get("/interfaces/{name}", handleGetInterface)
-	r.Put("/interfaces/{name}", handleSetStaticIP)
-	r.Get("/dns", handleGetDNS)
-	r.Put("/dns", handleSetDNS)
-	r.Get("/status", handleGetNetworkStatus)
+	r.Get("/interfaces", h.handleListInterfaces)
+	r.Get("/interfaces/{name}", h.handleGetInterface)
+	r.Put("/interfaces/{name}", h.handleSetStaticIP)
+	r.Get("/dns", h.handleGetDNS)
+	r.Put("/dns", h.handleSetDNS)
+	r.Get("/status", h.handleGetNetworkStatus)
 
 	return r
 }
 
-func handleListInterfaces(w http.ResponseWriter, r *http.Request) {
-	ifaces, err := ListInterfaces()
+// handler groups HTTP handlers with a shared Service instance.
+type handler struct {
+	svc *Service
+}
+
+func (h *handler) handleListInterfaces(w http.ResponseWriter, _ *http.Request) {
+	ifaces, err := h.svc.ListInterfaces()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -37,21 +44,25 @@ func handleListInterfaces(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ifaces)
 }
 
-func handleGetInterface(w http.ResponseWriter, r *http.Request) {
+func (h *handler) handleGetInterface(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	if !validName.MatchString(name) {
 		writeError(w, http.StatusBadRequest, "invalid interface name")
 		return
 	}
-	iface, err := GetInterface(name)
+	iface, err := h.svc.GetInterface(name)
 	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		if errors.Is(err, errIfaceNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, iface)
 }
 
-func handleSetStaticIP(w http.ResponseWriter, r *http.Request) {
+func (h *handler) handleSetStaticIP(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	if !validName.MatchString(name) {
 		writeError(w, http.StatusBadRequest, "invalid interface name")
@@ -61,20 +72,39 @@ func handleSetStaticIP(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 	var req StaticIPRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	iface, err := SetStaticIP(name, req)
+	iface, err := h.svc.SetStaticIP(name, req)
 	if err != nil {
+		if errors.Is(err, errInvalidCIDR) || errors.Is(err, errInvalidGW) ||
+			errors.Is(err, errEmptyIP) || errors.Is(err, errEmptyGateway) ||
+			errors.Is(err, errIPv6NotSupported) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if errors.Is(err, errIfaceNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, errNotLinux) {
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, iface)
 }
 
-func handleGetDNS(w http.ResponseWriter, r *http.Request) {
-	dns, err := GetDNS()
+func (h *handler) handleGetDNS(w http.ResponseWriter, _ *http.Request) {
+	dns, err := h.svc.GetDNS()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -82,24 +112,37 @@ func handleGetDNS(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dns)
 }
 
-func handleSetDNS(w http.ResponseWriter, r *http.Request) {
+func (h *handler) handleSetDNS(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 	var req DNSConfig
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	dns, err := SetDNS(req)
+	dns, err := h.svc.SetDNS(req)
 	if err != nil {
+		if errors.Is(err, errNotLinux) {
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
+		if errors.Is(err, errInvalidNameserver) || errors.Is(err, errInvalidSearchDom) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, dns)
 }
 
-func handleGetNetworkStatus(w http.ResponseWriter, r *http.Request) {
-	status, err := GetNetworkStatus()
+func (h *handler) handleGetNetworkStatus(w http.ResponseWriter, _ *http.Request) {
+	status, err := h.svc.GetNetworkStatus()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

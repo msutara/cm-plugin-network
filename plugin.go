@@ -4,6 +4,7 @@ package network
 
 import (
 	"net/http"
+	"sync"
 
 	"github.com/msutara/cm-plugin-network/pluginiface"
 )
@@ -12,7 +13,15 @@ import (
 var _ pluginiface.Plugin = (*NetworkPlugin)(nil)
 
 // NetworkPlugin implements the pluginiface.Plugin interface for network management.
-type NetworkPlugin struct{}
+type NetworkPlugin struct {
+	svc     *Service
+	svcOnce sync.Once
+}
+
+// NewNetworkPlugin creates a NetworkPlugin with a shared Service instance.
+func NewNetworkPlugin() *NetworkPlugin {
+	return &NetworkPlugin{svc: NewService()}
+}
 
 func (p *NetworkPlugin) Name() string {
 	return "network"
@@ -27,7 +36,12 @@ func (p *NetworkPlugin) Description() string {
 }
 
 func (p *NetworkPlugin) Routes() http.Handler {
-	return newRouter()
+	p.svcOnce.Do(func() {
+		if p.svc == nil {
+			p.svc = NewService()
+		}
+	})
+	return newRouter(p.svc)
 }
 
 func (p *NetworkPlugin) ScheduledJobs() []pluginiface.JobDefinition {
