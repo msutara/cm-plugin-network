@@ -175,4 +175,11 @@ func TestWriteError(t *testing.T) {
 	if errObj["message"] != "test message" {
 		t.Errorf("message: got %v, want %q", errObj["message"], "test message")
 	}
+	details, ok := errObj["details"].(map[string]any)
+	if !ok {
+		t.Fatalf("details field has wrong type: %T", errObj["details"])
+	}
+	if len(details) != 0 {
+		t.Errorf("details: got %v, want empty map", details)
+	}
 }

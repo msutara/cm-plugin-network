@@ -165,6 +165,7 @@ func writeError(w http.ResponseWriter, status int, message string) {
 		"error": map[string]any{
 			"code":    status,
 			"message": message,
+			"details": map[string]any{},
 		},
 	}); err != nil {
 		slog.Error("failed to write error response", "plugin", "network", "error", err)

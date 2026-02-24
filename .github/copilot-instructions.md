@@ -39,7 +39,7 @@ Routes are mounted under `/api/v1/plugins/network`.
 - Additional helper packages (e.g., `pluginiface`) are allowed
 - Use `github.com/go-chi/chi/v5` for HTTP routing
 - Use `log/slog` for all structured logging (include `"plugin", "network"`)
-- Error responses: `{"error": {"code": ..., "message": ...}}`
+- Error responses: `{"error": {"code": ..., "message": ..., "details": {}}}`
 - Job IDs follow the pattern `network.{job_name}`
 - Specs live in `specs/`, user docs in `docs/`
 - Filenames use UPPERCASE-KEBAB-CASE (e.g., `SPEC.md`, `USAGE.md`)
