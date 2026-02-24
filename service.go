@@ -185,13 +185,13 @@ func (s *Service) SetStaticIP(name string, req StaticIPRequest) (*Interface, err
 		return nil, errNotLinux
 	}
 
-	// Verify interface exists
-	if _, err := net.InterfaceByName(name); err != nil {
+	// Defense-in-depth: reject names with path separators at the service layer
+	if strings.ContainsAny(name, "/\\") || name == "." || name == ".." {
 		return nil, errIfaceNotFound
 	}
 
-	// Defense-in-depth: reject names with path separators at the service layer
-	if strings.ContainsAny(name, "/\\") || name == "." || name == ".." {
+	// Verify interface exists
+	if _, err := net.InterfaceByName(name); err != nil {
 		return nil, errIfaceNotFound
 	}
 
@@ -361,7 +361,6 @@ func defaultGatewayLinux() (string, error) {
 	return "", errors.New("no default gateway found")
 }
 
-// parseHexIP converts a hex-encoded little-endian IP to dotted notation.
 // parseHexIP converts an 8-character hex string from /proc/net/route into a
 // dotted-decimal IPv4 address. The kernel stores these values in host byte
 // order (little-endian on x86/ARM), so the octets are reversed.
