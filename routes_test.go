@@ -5,12 +5,25 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func testRouter() http.Handler {
 	return newRouter(NewService())
+}
+
+func testRouterWithResolvPath(t *testing.T) http.Handler {
+	t.Helper()
+	tmp := t.TempDir()
+	resolv := filepath.Join(tmp, "resolv.conf")
+	if err := os.WriteFile(resolv, []byte("nameserver 8.8.8.8\nsearch example.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	svc := &Service{resolvPath: resolv, interfacesDirPath: "/etc/network/interfaces.d"}
+	return newRouter(svc)
 }
 
 func TestHandleListInterfaces(t *testing.T) {
@@ -108,11 +121,18 @@ func TestHandleGetNetworkStatus(t *testing.T) {
 func TestHandleGetDNS(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/dns", nil)
-	testRouter().ServeHTTP(w, r)
+	testRouterWithResolvPath(t).ServeHTTP(w, r)
 
-	// May return OK or 500 depending on system resolv.conf access
-	if w.Code != http.StatusOK && w.Code != http.StatusInternalServerError {
-		t.Fatalf("got %d, want 200 or 500", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200", w.Code)
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	ns, ok := resp["nameservers"].([]any)
+	if !ok || len(ns) != 1 || ns[0] != "8.8.8.8" {
+		t.Fatalf("unexpected nameservers: %v", resp["nameservers"])
 	}
 }
 
