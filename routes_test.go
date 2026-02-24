@@ -175,4 +175,7 @@ func TestWriteError(t *testing.T) {
 	if errObj["message"] != "test message" {
 		t.Errorf("message: got %v, want %q", errObj["message"], "test message")
 	}
+	if _, ok := errObj["details"]; !ok {
+		t.Error("missing details field in error response")
+	}
 }
