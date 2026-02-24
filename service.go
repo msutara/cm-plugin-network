@@ -362,6 +362,9 @@ func defaultGatewayLinux() (string, error) {
 }
 
 // parseHexIP converts a hex-encoded little-endian IP to dotted notation.
+// parseHexIP converts an 8-character hex string from /proc/net/route into a
+// dotted-decimal IPv4 address. The kernel stores these values in host byte
+// order (little-endian on x86/ARM), so the octets are reversed.
 func parseHexIP(hex string) string {
 	if len(hex) != 8 {
 		return ""
@@ -384,6 +387,6 @@ func parseHexIP(hex string) string {
 		}
 		octets[i] = b
 	}
-	// /proc/net/route stores in little-endian on x86
+	// /proc/net/route stores in host byte order (little-endian on x86/ARM)
 	return fmt.Sprintf("%d.%d.%d.%d", octets[3], octets[2], octets[1], octets[0])
 }
