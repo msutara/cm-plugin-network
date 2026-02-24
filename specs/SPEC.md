@@ -16,7 +16,6 @@ managing DNS settings, and viewing connection status.
 - **Set static IP** configuration for a specific adapter.
 - **Manage DNS settings** (nameservers, search domains).
 - **Show connection status** (default gateway, reachability).
-- **View network logs** (recent events from systemd journal).
 
 ---
 
@@ -26,7 +25,9 @@ This plugin does **not**:
 
 - Manage Wi-Fi credentials or WPA configuration.
 - Handle firewall rules (future plugin scope).
-- Provide multi-node networking or VPN management.
+- Provide multi-node networking.
+- Run a DHCP server.
+- Manage VPN connections or tunnels.
 
 ---
 
@@ -37,8 +38,13 @@ This plugin does **not**:
 - Registration with the core is handled externally (e.g., by the host
   application importing the plugin and calling a registration function).
 - Routes are mounted by the core under `/api/v1/plugins/network`.
-- Imported in `cmd/cm/main.go` with a blank import:
-  `import _ "github.com/msutara/cm-plugin-network"`
+- Imported in `cmd/cm/main.go`:
+
+```go
+import network "github.com/msutara/cm-plugin-network"
+
+plugin.Register(network.NewNetworkPlugin())
+```
 
 ---
 
@@ -56,95 +62,22 @@ All routes are relative to the plugin mount point
 | PUT    | /dns                | Update DNS configuration           |
 | GET    | /status             | Show overall network status        |
 
-### 5.1 GET /interfaces
+---
 
-Returns a JSON array of interface objects.
+## 6. Security
 
-```json
-[
-  {
-    "name": "eth0",
-    "mac": "aa:bb:cc:dd:ee:ff",
-    "ip": "192.168.1.10/24",
-    "state": "up"
-  }
-]
-```
-
-### 5.2 GET /interfaces/{name}
-
-Returns a single interface object (same shape as above) or 404.
-
-### 5.3 PUT /interfaces/{name}
-
-Request body:
-
-```json
-{
-  "ip": "192.168.1.100/24",
-  "gateway": "192.168.1.1"
-}
-```
-
-Returns the updated interface object or an error.
-
-### 5.4 GET /dns
-
-```json
-{
-  "nameservers": ["8.8.8.8", "1.1.1.1"],
-  "search": ["local"]
-}
-```
-
-### 5.5 PUT /dns
-
-Request body: same shape as GET response.
-
-### 5.6 GET /status
-
-```json
-{
-  "default_gateway": "192.168.1.1",
-  "dns_reachable": true,
-  "internet_reachable": true
-}
-```
+- **IPv4-only** — all IP inputs are validated as IPv4 addresses.
+- **CIDR validation** — static IP values must include a valid CIDR suffix.
+- **Path traversal defense** — interface names are validated via regex to
+  prevent directory traversal in system calls.
+- **DNS injection prevention** — nameserver and search domain values are
+  validated before being written to system configuration.
+- **MaxBytesReader** — PUT request bodies are size-limited to prevent
+  abuse.
 
 ---
 
-## 6. Domain Types
+## 7. Configuration
 
-```go
-type Interface struct {
-    Name  string `json:"name"`
-    MAC   string `json:"mac"`
-    IP    string `json:"ip"`
-    State string `json:"state"`
-}
-
-type DNSConfig struct {
-    Nameservers []string `json:"nameservers"`
-    Search      []string `json:"search"`
-}
-
-type StaticIPRequest struct {
-    IP      string `json:"ip"`
-    Gateway string `json:"gateway"`
-}
-
-type NetworkStatus struct {
-    DefaultGateway    string `json:"default_gateway"`
-    DNSReachable      bool   `json:"dns_reachable"`
-    InternetReachable bool   `json:"internet_reachable"`
-}
-```
-
----
-
-## 7. Future Extensions
-
-- Wi-Fi configuration (SSID scanning, WPA supplicant).
-- VLAN support.
-- Scheduled connectivity checks as a plugin job.
-- Firewall rule management (separate plugin).
+The network plugin currently has no plugin-specific configuration.
+Global CM settings (port, auth) apply as usual via `/etc/cm/config.yaml`.

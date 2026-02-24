@@ -2,17 +2,23 @@
 
 ## Overview
 
-The network plugin is integrated into Config Manager by importing it and
-registering the plugin with the core's plugin registry. In `cmd/cm/main.go`:
+The network plugin provides REST API endpoints for managing network
+interfaces, static IP addresses, DNS configuration, and connectivity
+status on headless Debian-based nodes.
+
+## Integration
+
+The plugin is compiled into the core binary via a normal import in
+`cmd/cm/main.go`:
 
 ```go
-import _ "github.com/msutara/cm-plugin-network"
+import network "github.com/msutara/cm-plugin-network"
+
+plugin.Register(network.NewNetworkPlugin())
 ```
 
 > **Note:** In Phase 1, the plugin uses a local `pluginiface` package that
 > mirrors the core's `plugin.Plugin` interface for independent development.
-> The blank import pattern above describes the intended end-state when full
-> integration with the core is wired.
 
 Once loaded, its routes are available under `/api/v1/plugins/network`.
 

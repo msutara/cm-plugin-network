@@ -1,36 +1,35 @@
-# CM Plugin Network
+# cm-plugin-network
 
-Config Manager plugin for network interface configuration on headless
-Debian-based nodes. Implements a local `pluginiface.Plugin` interface that
-mirrors the core's [`plugin.Plugin`](https://github.com/msutara/config-manager-core)
-contract for independent development.
+Network configuration plugin for
+[Config Manager](https://github.com/msutara/config-manager-core). Designed for
+headless Debian-based nodes (Raspbian Bookworm ARM64, Debian Bullseye slim).
 
 ## Features
 
-- **List interfaces** — enumerate network interfaces and their state
-- **Static IP** — configure static IP addresses per adapter
-- **DNS management** — view and update nameservers and search domains
-- **Status checks** — default gateway and reachability information
-- **REST API** — all functionality exposed via JSON endpoints
+- List network interfaces and their state
+- Configure static IP addresses per adapter
+- View and update DNS nameservers and search domains
+- Check default gateway and internet reachability
+- RESTful API mounted at `/api/v1/plugins/network`
 
 ## Documentation
 
-- [Usage Guide](docs/USAGE.md) — API examples and integration
-
-## Specifications
-
-- [SPEC.md](specs/SPEC.md) — plugin specification and API contract
+- [Usage Guide](docs/USAGE.md) — endpoint examples and integration
+- [Specification](specs/SPEC.md) — responsibilities, integration, API routes
 
 ## Development
 
 ```bash
-# Lint
+# lint
 golangci-lint run
 
-# Test
+# test
 go test ./...
 ```
 
+CI runs automatically on push/PR to `main` via GitHub Actions
+(`.github/workflows/ci.yml`).
+
 ## License
 
-The license for this project has not yet been finalized.
+License not yet finalized.
