@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
@@ -206,7 +207,7 @@ func (s *Service) SetStaticIP(name string, req StaticIPRequest) (*Interface, err
 	config := fmt.Sprintf("auto %s\niface %s inet static\n    address %s\n    netmask %s\n    gateway %s\n",
 		name, name, ip.String(), netmask, req.Gateway)
 
-	confPath := s.interfacesDirPath + "/" + name
+	confPath := filepath.Join(s.interfacesDirPath, name)
 	if err := os.WriteFile(confPath, []byte(config), 0o644); err != nil {
 		return nil, fmt.Errorf("writing interface config: %w", err)
 	}
