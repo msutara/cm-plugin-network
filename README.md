@@ -30,6 +30,14 @@ go test ./...
 CI runs automatically on push/PR to `main` via GitHub Actions
 (`.github/workflows/ci.yml`).
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for vulnerability reporting.
+
 ## License
 
-License not yet finalized.
+See [LICENSE](LICENSE) for details.
