@@ -33,8 +33,7 @@ This plugin does **not**:
 
 ## 4. Integration
 
-- Implements the `pluginiface.Plugin` interface (local copy of the core
-  `plugin.Plugin` interface for independent development).
+- Implements the core `plugin.Plugin` interface from `config-manager-core`.
 - Registration with the core is handled externally (e.g., by the host
   application importing the plugin and calling a registration function).
 - Routes are mounted by the core under `/api/v1/plugins/network`.
