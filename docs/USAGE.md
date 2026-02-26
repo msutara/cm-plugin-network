@@ -27,19 +27,19 @@ Once loaded, its routes are available under `/api/v1/plugins/network`.
 ### List Interfaces
 
 ```bash
-curl http://localhost:8080/api/v1/plugins/network/interfaces
+curl http://localhost:7788/api/v1/plugins/network/interfaces
 ```
 
 ### Get Interface Details
 
 ```bash
-curl http://localhost:8080/api/v1/plugins/network/interfaces/eth0
+curl http://localhost:7788/api/v1/plugins/network/interfaces/eth0
 ```
 
 ### Set Static IP
 
 ```bash
-curl -X PUT http://localhost:8080/api/v1/plugins/network/interfaces/eth0 \
+curl -X PUT http://localhost:7788/api/v1/plugins/network/interfaces/eth0 \
   -H "Content-Type: application/json" \
   -d '{"ip": "192.168.1.100/24", "gateway": "192.168.1.1"}'
 ```
@@ -47,13 +47,13 @@ curl -X PUT http://localhost:8080/api/v1/plugins/network/interfaces/eth0 \
 ### Get DNS Configuration
 
 ```bash
-curl http://localhost:8080/api/v1/plugins/network/dns
+curl http://localhost:7788/api/v1/plugins/network/dns
 ```
 
 ### Update DNS Configuration
 
 ```bash
-curl -X PUT http://localhost:8080/api/v1/plugins/network/dns \
+curl -X PUT http://localhost:7788/api/v1/plugins/network/dns \
   -H "Content-Type: application/json" \
   -d '{"nameservers": ["8.8.8.8", "1.1.1.1"], "search": ["local"]}'
 ```
@@ -61,7 +61,7 @@ curl -X PUT http://localhost:8080/api/v1/plugins/network/dns \
 ### Check Network Status
 
 ```bash
-curl http://localhost:8080/api/v1/plugins/network/status
+curl http://localhost:7788/api/v1/plugins/network/status
 ```
 
 ## Configuration
