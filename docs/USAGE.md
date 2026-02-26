@@ -17,8 +17,8 @@ import network "github.com/msutara/cm-plugin-network"
 plugin.Register(network.NewNetworkPlugin())
 ```
 
-> **Note:** In Phase 1, the plugin uses a local `pluginiface` package that
-> mirrors the core's `plugin.Plugin` interface for independent development.
+> **Note:** The plugin implements the `plugin.Plugin` interface from
+> `config-manager-core` directly.
 
 Once loaded, its routes are available under `/api/v1/plugins/network`.
 

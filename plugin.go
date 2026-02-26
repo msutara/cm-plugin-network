@@ -6,13 +6,13 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/msutara/cm-plugin-network/pluginiface"
+	"github.com/msutara/config-manager-core/plugin"
 )
 
-// Compile-time check: NetworkPlugin must implement pluginiface.Plugin.
-var _ pluginiface.Plugin = (*NetworkPlugin)(nil)
+// Compile-time check: NetworkPlugin must implement plugin.Plugin.
+var _ plugin.Plugin = (*NetworkPlugin)(nil)
 
-// NetworkPlugin implements the pluginiface.Plugin interface for network management.
+// NetworkPlugin implements the core plugin.Plugin interface for network management.
 type NetworkPlugin struct {
 	svc     *Service
 	svcOnce sync.Once
@@ -44,6 +44,6 @@ func (p *NetworkPlugin) Routes() http.Handler {
 	return newRouter(p.svc)
 }
 
-func (p *NetworkPlugin) ScheduledJobs() []pluginiface.JobDefinition {
+func (p *NetworkPlugin) ScheduledJobs() []plugin.JobDefinition {
 	return nil
 }

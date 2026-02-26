@@ -5,10 +5,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/msutara/cm-plugin-network/pluginiface"
+	"github.com/msutara/config-manager-core/plugin"
 )
 
-var _ pluginiface.Plugin = (*NetworkPlugin)(nil)
+var _ plugin.Plugin = (*NetworkPlugin)(nil)
 
 func TestNewNetworkPlugin(t *testing.T) {
 	p := NewNetworkPlugin()

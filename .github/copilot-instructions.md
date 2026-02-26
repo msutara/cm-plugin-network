@@ -11,7 +11,7 @@ Target platforms: Raspbian Bookworm (ARM64), Debian Bullseye slim.
 
 ## Architecture
 
-- **plugin.go** — `NetworkPlugin` struct implementing `pluginiface.Plugin`;
+- **plugin.go** — `NetworkPlugin` struct implementing `plugin.Plugin` from `config-manager-core`;
   registration handled by the core (no `init()` self-registration);
   uses `sync.Once` for lazy service initialization
 - **routes.go** — Chi router with HTTP handlers; input validation via regex;
@@ -36,7 +36,7 @@ Routes are mounted under `/api/v1/plugins/network`.
 ## Conventions
 
 - Main Go package is `package network` at the repo root
-- Additional helper packages (e.g., `pluginiface`) are allowed
+- Additional helper packages are allowed
 - Use `github.com/go-chi/chi/v5` for HTTP routing
 - Use `log/slog` for all structured logging (include `"plugin", "network"`)
 - Error responses: `{"error": {"code": ..., "message": ..., "details": {}}}`
