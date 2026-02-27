@@ -47,3 +47,11 @@ func (p *NetworkPlugin) Routes() http.Handler {
 func (p *NetworkPlugin) ScheduledJobs() []plugin.JobDefinition {
 	return nil
 }
+
+func (p *NetworkPlugin) Endpoints() []plugin.Endpoint {
+	return []plugin.Endpoint{
+		{Method: "GET", Path: "/interfaces", Description: "Network interfaces"},
+		{Method: "GET", Path: "/status", Description: "Connectivity status"},
+		{Method: "GET", Path: "/dns", Description: "DNS configuration"},
+	}
+}
