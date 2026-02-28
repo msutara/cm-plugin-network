@@ -4,3 +4,5 @@ github.com/msutara/config-manager-core v0.1.0 h1:v6Z52xpWktpfKgISplsQAoJ8YqwtJ7l
 github.com/msutara/config-manager-core v0.1.0/go.mod h1:DGkD1SH0vR8ECP4HKA6zh506Iz4Xvlu5fa3j/5R/APM=
 github.com/msutara/config-manager-core v0.2.1-0.20260227233008-bf7503227232 h1:xRrTPYjuDHA5Y2Ew7CljRNFt5rUmr+AIjsOVvTjrkTQ=
 github.com/msutara/config-manager-core v0.2.1-0.20260227233008-bf7503227232/go.mod h1:hFtai6IbkM0b30O7m5kzVtsdOOyMnPLnXAnOe/UNfdI=
+github.com/msutara/config-manager-core v0.2.1-0.20260228010904-573fdc7c0b94 h1:0eyIwIIund3hXoLNCp/rYJ+QUhce5/Fs5Z90jZLia3g=
+github.com/msutara/config-manager-core v0.2.1-0.20260228010904-573fdc7c0b94/go.mod h1:hFtai6IbkM0b30O7m5kzVtsdOOyMnPLnXAnOe/UNfdI=
