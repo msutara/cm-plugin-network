@@ -58,6 +58,29 @@ func TestNetworkPlugin_Routes(t *testing.T) {
 	}
 }
 
+func TestNetworkPlugin_Endpoints(t *testing.T) {
+	p := NewNetworkPlugin()
+	eps := p.Endpoints()
+
+	if len(eps) != 3 {
+		t.Fatalf("Endpoints: got %d, want 3", len(eps))
+	}
+
+	want := []struct{ method, path string }{
+		{http.MethodGet, "/interfaces"},
+		{http.MethodGet, "/status"},
+		{http.MethodGet, "/dns"},
+	}
+	for i, w := range want {
+		if eps[i].Method != w.method || eps[i].Path != w.path {
+			t.Errorf("endpoint[%d] = %s %s, want %s %s", i, eps[i].Method, eps[i].Path, w.method, w.path)
+		}
+		if eps[i].Description == "" {
+			t.Errorf("endpoint[%d] has empty description", i)
+		}
+	}
+}
+
 func TestNetworkPlugin_ScheduledJobs(t *testing.T) {
 	p := NewNetworkPlugin()
 	jobs := p.ScheduledJobs()

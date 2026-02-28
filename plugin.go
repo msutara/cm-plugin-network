@@ -50,8 +50,8 @@ func (p *NetworkPlugin) ScheduledJobs() []plugin.JobDefinition {
 
 func (p *NetworkPlugin) Endpoints() []plugin.Endpoint {
 	return []plugin.Endpoint{
-		{Method: "GET", Path: "/interfaces", Description: "Network interfaces"},
-		{Method: "GET", Path: "/status", Description: "Connectivity status"},
-		{Method: "GET", Path: "/dns", Description: "DNS configuration"},
+		{Method: http.MethodGet, Path: "/interfaces", Description: "Network interface details"},
+		{Method: http.MethodGet, Path: "/status", Description: "Connectivity and reachability status"},
+		{Method: http.MethodGet, Path: "/dns", Description: "DNS configuration"},
 	}
 }
