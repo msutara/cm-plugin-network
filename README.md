@@ -7,10 +7,13 @@ headless Debian-based nodes (Raspbian Bookworm ARM64, Debian Bullseye slim).
 ## Features
 
 - List network interfaces and their state
-- Configure static IP addresses per adapter
+- Configure static IP addresses per adapter (VLAN and alias names supported)
 - View and update DNS nameservers and search domains
 - Check default gateway and internet reachability
 - RESTful API mounted at `/api/v1/plugins/network`
+- Atomic config writes with power-loss durability
+- IPv4-mapped IPv6 canonicalization and subnet validation
+- Symlink-safe DNS writes (systemd-resolved compatible)
 
 ## Documentation
 

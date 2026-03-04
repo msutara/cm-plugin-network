@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"regexp"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -13,8 +12,9 @@ import (
 // maxBodySize limits JSON request bodies to 1 MB.
 const maxBodySize = 1 << 20
 
-// validName matches safe interface names (alphanumeric, hyphens, underscores).
-var validName = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+// validName matches safe interface names (alphanumeric, hyphens,
+// underscores, dots for VLANs, colons for aliases).
+var validName = validIfaceName
 
 func newRouter(svc *Service) http.Handler {
 	r := chi.NewRouter()
@@ -52,6 +52,10 @@ func (h *handler) handleGetInterface(w http.ResponseWriter, r *http.Request) {
 	}
 	iface, err := h.svc.GetInterface(name)
 	if err != nil {
+		if errors.Is(err, errInvalidIfaceName) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		if errors.Is(err, errIfaceNotFound) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
@@ -85,7 +89,8 @@ func (h *handler) handleSetStaticIP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, errInvalidCIDR) || errors.Is(err, errInvalidGW) ||
 			errors.Is(err, errEmptyIP) || errors.Is(err, errEmptyGateway) ||
-			errors.Is(err, errIPv6NotSupported) {
+			errors.Is(err, errIPv6NotSupported) || errors.Is(err, errGWNotInSubnet) ||
+			errors.Is(err, errGWEqualsIP) || errors.Is(err, errInvalidIfaceName) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
