@@ -233,7 +233,7 @@ func (s *Service) SetStaticIP(name string, req StaticIPRequest) (*Interface, err
 		return nil, errNotLinux
 	}
 
-	// Defense-in-depth: reject names with path separators at the service layer
+	// Defense-in-depth: validate interface name at the service layer
 	if !validIfaceName.MatchString(name) {
 		return nil, errInvalidIfaceName
 	}

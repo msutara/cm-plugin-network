@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"regexp"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -15,7 +14,7 @@ const maxBodySize = 1 << 20
 
 // validName matches safe interface names (alphanumeric, hyphens,
 // underscores, dots for VLANs, colons for aliases).
-var validName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:-]*$`)
+var validName = validIfaceName
 
 func newRouter(svc *Service) http.Handler {
 	r := chi.NewRouter()

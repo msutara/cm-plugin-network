@@ -339,14 +339,14 @@ func TestHandleSetStaticIP_IPv4MappedIPv6Gateway(t *testing.T) {
 	}
 	router := newRouter(svc)
 
+	// Use loopback — guaranteed to exist on all Linux systems.
 	body := `{"ip": "192.168.1.10/24", "gateway": "::ffff:192.168.1.1"}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/interfaces/eth0", bytes.NewBufferString(body))
+	r := httptest.NewRequest(http.MethodPut, "/interfaces/lo", bytes.NewBufferString(body))
 	router.ServeHTTP(w, r)
 
-	// With /bin/true stubs, config file is always written regardless of
-	// whether eth0 exists as a real OS interface. Assert it was written.
-	confPath := filepath.Join(dir, "eth0")
+	// With /bin/true stubs, config file is always written.
+	confPath := filepath.Join(dir, "lo")
 	got, err := os.ReadFile(confPath)
 	if err != nil {
 		t.Fatalf("config file not written: %v", err)
