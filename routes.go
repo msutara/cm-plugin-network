@@ -52,7 +52,7 @@ func (h *handler) handleGetInterface(w http.ResponseWriter, r *http.Request) {
 	}
 	iface, err := h.svc.GetInterface(name)
 	if err != nil {
-		if errors.Is(err, errIfaceNotFound) {
+		if errors.Is(err, errIfaceNotFound) || errors.Is(err, errInvalidIfaceName) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
@@ -85,7 +85,8 @@ func (h *handler) handleSetStaticIP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, errInvalidCIDR) || errors.Is(err, errInvalidGW) ||
 			errors.Is(err, errEmptyIP) || errors.Is(err, errEmptyGateway) ||
-			errors.Is(err, errIPv6NotSupported) {
+			errors.Is(err, errIPv6NotSupported) || errors.Is(err, errGWNotInSubnet) ||
+			errors.Is(err, errGWEqualsIP) || errors.Is(err, errInvalidIfaceName) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}

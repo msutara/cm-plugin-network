@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -181,5 +182,125 @@ func TestWriteError(t *testing.T) {
 	}
 	if len(details) != 0 {
 		t.Errorf("details: got %v, want empty map", details)
+	}
+}
+
+func TestHandleSetStaticIP_GWNotInSubnet(t *testing.T) {
+	body := `{"ip": "192.168.1.10/24", "gateway": "10.0.0.1"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/interfaces/eth0", bytes.NewBufferString(body))
+	testRouter().ServeHTTP(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want %d", w.Code, http.StatusBadRequest)
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	errObj := resp["error"].(map[string]any)
+	msg := errObj["message"].(string)
+	if !strings.Contains(msg, "subnet") {
+		t.Errorf("error message should mention subnet, got %q", msg)
+	}
+}
+
+func TestHandleSetStaticIP_GWEqualsIP(t *testing.T) {
+	body := `{"ip": "192.168.1.10/24", "gateway": "192.168.1.10"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/interfaces/eth0", bytes.NewBufferString(body))
+	testRouter().ServeHTTP(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestHandleGetInterface_PathTraversal(t *testing.T) {
+	traversals := []string{
+		"/interfaces/..%2F..%2Fetc%2Fpasswd",
+		"/interfaces/..%5C..%5Cetc%5Cshadow",
+	}
+	for _, path := range traversals {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, path, nil)
+		testRouter().ServeHTTP(w, r)
+
+		if w.Code == http.StatusOK {
+			t.Errorf("path %q should not return 200", path)
+		}
+	}
+}
+
+func TestHandleSetDNS_InvalidNameserver(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("skipping Linux-only test")
+	}
+	svc := &Service{
+		resolvPath:        filepath.Join(t.TempDir(), "resolv.conf"),
+		interfacesDirPath: "/etc/network/interfaces.d",
+	}
+	router := newRouter(svc)
+
+	body := `{"nameservers": ["not-an-ip", "8.8.8.8"]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/dns", bytes.NewBufferString(body))
+	router.ServeHTTP(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestHandleSetDNS_InvalidSearchDomain(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("skipping Linux-only test")
+	}
+	svc := &Service{
+		resolvPath:        filepath.Join(t.TempDir(), "resolv.conf"),
+		interfacesDirPath: "/etc/network/interfaces.d",
+	}
+	router := newRouter(svc)
+
+	body := `{"nameservers": ["8.8.8.8"], "search": ["valid.com", "inval!d"]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/dns", bytes.NewBufferString(body))
+	router.ServeHTTP(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestHandleSetStaticIP_EmptyFields(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"empty_ip", `{"ip": "", "gateway": "192.168.1.1"}`},
+		{"empty_gw", `{"ip": "192.168.1.10/24", "gateway": ""}`},
+		{"missing_fields", `{}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPut, "/interfaces/eth0", bytes.NewBufferString(tc.body))
+			testRouter().ServeHTTP(w, r)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("got %d, want %d", w.Code, http.StatusBadRequest)
+			}
+		})
+	}
+}
+
+func TestHandleSetStaticIP_IPv6Rejected(t *testing.T) {
+	body := `{"ip": "fe80::1/64", "gateway": "fe80::1"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/interfaces/eth0", bytes.NewBufferString(body))
+	testRouter().ServeHTTP(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want %d", w.Code, http.StatusBadRequest)
 	}
 }
