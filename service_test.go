@@ -841,8 +841,10 @@ func TestSetStaticIP_RollbackOnIfupFailure(t *testing.T) {
 		t.Errorf("config not restored after rollback:\ngot:  %q\nwant: %q", string(got), oldConfig)
 	}
 
-	if _, statErr := os.Stat(confPath + ".bak"); !os.IsNotExist(statErr) {
-		t.Error("backup file should not exist after rollback")
+	// With /bin/false as ifupPath, both the initial and rollback ifup fail,
+	// so the backup is preserved for manual recovery.
+	if _, statErr := os.Stat(confPath + ".bak"); os.IsNotExist(statErr) {
+		t.Error("backup file should be preserved when rollback ifup also fails")
 	}
 }
 
