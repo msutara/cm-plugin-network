@@ -711,7 +711,9 @@ func backupConfigFile(configPath string) (string, error) {
 	return backupPath, nil
 }
 
-// restoreConfigFile restores a backup and removes the backup file.
+// restoreConfigFile restores a backup to the original config path.
+// The caller is responsible for removing the backup file after
+// confirming the restore was successful (e.g. ifup succeeded).
 func restoreConfigFile(backupPath, configPath string) error {
 	data, err := os.ReadFile(backupPath)
 	if err != nil {
