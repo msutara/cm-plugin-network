@@ -736,3 +736,355 @@ func TestSetDNS_ThroughSymlink(t *testing.T) {
 		t.Errorf("symlink target changed: got %q, want %q", target, realFile)
 	}
 }
+
+func TestBackupConfigFile_NoExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nonexistent")
+
+	backupPath, err := backupConfigFile(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if backupPath != "" {
+		t.Errorf("expected empty backup path for missing file, got %q", backupPath)
+	}
+}
+
+func TestBackupConfigFile_ExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config")
+	content := []byte("original content\n")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	backupPath, err := backupConfigFile(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if backupPath != path+".bak" {
+		t.Errorf("backup path: got %q, want %q", backupPath, path+".bak")
+	}
+
+	got, err := os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatalf("reading backup: %v", err)
+	}
+	if string(got) != string(content) {
+		t.Errorf("backup content: got %q, want %q", got, content)
+	}
+}
+
+func TestRestoreConfigFile(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config")
+	backupPath := configPath + ".bak"
+
+	originalContent := []byte("original content\n")
+	if err := os.WriteFile(backupPath, originalContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte("new content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := restoreConfigFile(backupPath, configPath); err != nil {
+		t.Fatalf("restoreConfigFile: %v", err)
+	}
+
+	got, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(originalContent) {
+		t.Errorf("restored content: got %q, want %q", got, originalContent)
+	}
+
+	if _, err := os.Stat(backupPath); !os.IsNotExist(err) {
+		t.Error("backup file should have been removed after restore")
+	}
+}
+
+func TestSetStaticIP_RollbackOnIfupFailure(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("skipping Linux-only test")
+	}
+
+	dir := t.TempDir()
+	confPath := filepath.Join(dir, "lo")
+	oldConfig := "auto lo\niface lo inet static\n    address 10.0.0.1\n    netmask 255.255.255.0\n    gateway 10.0.0.254\n"
+	if err := os.WriteFile(confPath, []byte(oldConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := &Service{
+		interfacesDirPath: dir,
+		cmdTimeout:        5 * time.Second,
+		ifdownPath:        "/bin/true",
+		ifupPath:          "/bin/false",
+	}
+
+	_, err := svc.SetStaticIP("lo", StaticIPRequest{
+		IP:      "192.168.1.10/24",
+		Gateway: "192.168.1.1",
+	})
+	if err == nil {
+		t.Fatal("expected error when ifup fails")
+	}
+
+	got, err := os.ReadFile(confPath)
+	if err != nil {
+		t.Fatalf("reading config after rollback: %v", err)
+	}
+	if string(got) != oldConfig {
+		t.Errorf("config not restored after rollback:\ngot:  %q\nwant: %q", string(got), oldConfig)
+	}
+
+	if _, statErr := os.Stat(confPath + ".bak"); !os.IsNotExist(statErr) {
+		t.Error("backup file should not exist after rollback")
+	}
+}
+
+func TestSetStaticIP_RollbackAndRestoreIfupAlsoFails(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("skipping Linux-only test")
+	}
+
+	dir := t.TempDir()
+	confPath := filepath.Join(dir, "lo")
+	oldConfig := "auto lo\niface lo inet static\n    address 10.0.0.1\n    netmask 255.255.255.0\n    gateway 10.0.0.254\n"
+	if err := os.WriteFile(confPath, []byte(oldConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := &Service{
+		interfacesDirPath: dir,
+		cmdTimeout:        5 * time.Second,
+		ifdownPath:        "/bin/true",
+		ifupPath:          "/bin/false",
+	}
+
+	_, err := svc.SetStaticIP("lo", StaticIPRequest{
+		IP:      "192.168.1.10/24",
+		Gateway: "192.168.1.1",
+	})
+	if err == nil {
+		t.Fatal("expected error when ifup fails")
+	}
+
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "ifup lo failed") {
+		t.Errorf("error should mention initial ifup failure: %v", err)
+	}
+	if !strings.Contains(errMsg, "rollback ifup also failed") {
+		t.Errorf("error should mention rollback ifup failure: %v", err)
+	}
+}
+
+func TestSetStaticIP_NoBackupForNewInterface(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("skipping Linux-only test")
+	}
+
+	dir := t.TempDir()
+	confPath := filepath.Join(dir, "lo")
+
+	svc := &Service{
+		interfacesDirPath: dir,
+		cmdTimeout:        5 * time.Second,
+		ifdownPath:        "/bin/true",
+		ifupPath:          "/bin/false",
+	}
+
+	_, err := svc.SetStaticIP("lo", StaticIPRequest{
+		IP:      "192.168.1.10/24",
+		Gateway: "192.168.1.1",
+	})
+	if err == nil {
+		t.Fatal("expected error when ifup fails")
+	}
+
+	got, err := os.ReadFile(confPath)
+	if err != nil {
+		t.Fatalf("reading config: %v", err)
+	}
+	if !strings.Contains(string(got), "192.168.1.10") {
+		t.Error("new config should remain when no backup exists")
+	}
+
+	if _, statErr := os.Stat(confPath + ".bak"); !os.IsNotExist(statErr) {
+		t.Error("no backup file should exist for new interface")
+	}
+}
+
+func TestSetDNS_RollbackOnWriteFailure(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("skipping Linux-only test")
+	}
+
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+	originalContent := "nameserver 9.9.9.9\n"
+	if err := os.WriteFile(resolvPath, []byte(originalContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	svc := &Service{resolvPath: resolvPath}
+	_, err := svc.SetDNS(DNSConfig{Nameservers: []string{"8.8.8.8"}})
+	if err == nil {
+		t.Fatal("expected error when directory is read-only")
+	}
+
+	_ = os.Chmod(dir, 0o755)
+
+	got, err := os.ReadFile(resolvPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != originalContent {
+		t.Errorf("original content not preserved: got %q, want %q", got, originalContent)
+	}
+}
+
+func TestDryRunStaticIP_Valid(t *testing.T) {
+	dir := t.TempDir()
+	confPath := filepath.Join(dir, "eth0")
+	oldConfig := "auto eth0\niface eth0 inet static\n    address 10.0.0.1\n    netmask 255.255.255.0\n    gateway 10.0.0.254\n"
+	if err := os.WriteFile(confPath, []byte(oldConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := &Service{interfacesDirPath: dir}
+	result, err := svc.DryRunStaticIP("eth0", StaticIPRequest{
+		IP:      "192.168.1.10/24",
+		Gateway: "192.168.1.1",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Valid {
+		t.Error("expected Valid=true")
+	}
+	if result.Current != oldConfig {
+		t.Errorf("Current: got %q, want %q", result.Current, oldConfig)
+	}
+	if !strings.Contains(result.Proposed, "192.168.1.10") {
+		t.Errorf("Proposed should contain new IP, got: %q", result.Proposed)
+	}
+	if !strings.Contains(result.Proposed, "gateway 192.168.1.1") {
+		t.Errorf("Proposed should contain gateway, got: %q", result.Proposed)
+	}
+	if len(result.Changes) == 0 {
+		t.Error("expected non-empty Changes")
+	}
+
+	// Verify file was NOT modified
+	got, err := os.ReadFile(confPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != oldConfig {
+		t.Errorf("dry-run should not modify file: got %q, want %q", string(got), oldConfig)
+	}
+}
+
+func TestDryRunStaticIP_InvalidRequest(t *testing.T) {
+	dir := t.TempDir()
+	svc := &Service{interfacesDirPath: dir}
+
+	cases := []struct {
+		name string
+		req  StaticIPRequest
+	}{
+		{"empty_ip", StaticIPRequest{IP: "", Gateway: "192.168.1.1"}},
+		{"bad_cidr", StaticIPRequest{IP: "10.0.0.1", Gateway: "10.0.0.254"}},
+		{"empty_gw", StaticIPRequest{IP: "192.168.1.10/24", Gateway: ""}},
+		{"bad_gw", StaticIPRequest{IP: "192.168.1.10/24", Gateway: "not-an-ip"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := svc.DryRunStaticIP("eth0", tc.req)
+			if err == nil {
+				t.Error("expected validation error")
+			}
+		})
+	}
+}
+
+func TestDryRunDNS_Valid(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+	oldContent := "nameserver 9.9.9.9\n"
+	if err := os.WriteFile(resolvPath, []byte(oldContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := &Service{resolvPath: resolvPath}
+	result, err := svc.DryRunDNS(DNSConfig{
+		Nameservers: []string{"8.8.8.8", "1.1.1.1"},
+		Search:      []string{"example.com"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Valid {
+		t.Error("expected Valid=true")
+	}
+	if result.Current != oldContent {
+		t.Errorf("Current: got %q, want %q", result.Current, oldContent)
+	}
+	if !strings.Contains(result.Proposed, "nameserver 8.8.8.8") {
+		t.Errorf("Proposed should contain nameserver, got: %q", result.Proposed)
+	}
+	if !strings.Contains(result.Proposed, "search example.com") {
+		t.Errorf("Proposed should contain search domain, got: %q", result.Proposed)
+	}
+	if len(result.Changes) == 0 {
+		t.Error("expected non-empty Changes")
+	}
+
+	// Verify file was NOT modified
+	got, err := os.ReadFile(resolvPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != oldContent {
+		t.Errorf("dry-run should not modify file: got %q, want %q", string(got), oldContent)
+	}
+}
+
+func TestDryRunDNS_InvalidNameserver(t *testing.T) {
+	dir := t.TempDir()
+	svc := &Service{resolvPath: filepath.Join(dir, "resolv.conf")}
+
+	_, err := svc.DryRunDNS(DNSConfig{
+		Nameservers: []string{"not-an-ip", "8.8.8.8"},
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid nameserver")
+	}
+	if !errors.Is(err, errInvalidNameserver) {
+		t.Errorf("got %v, want errInvalidNameserver", err)
+	}
+}
+
+func TestDryRunDNS_InvalidSearchDomain(t *testing.T) {
+	dir := t.TempDir()
+	svc := &Service{resolvPath: filepath.Join(dir, "resolv.conf")}
+
+	_, err := svc.DryRunDNS(DNSConfig{
+		Nameservers: []string{"8.8.8.8"},
+		Search:      []string{"valid.com", "inval!d"},
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid search domain")
+	}
+	if !errors.Is(err, errInvalidSearchDom) {
+		t.Errorf("got %v, want errInvalidSearchDom", err)
+	}
+}

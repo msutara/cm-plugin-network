@@ -85,24 +85,24 @@ func (h *handler) handleSetStaticIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.URL.Query().Get("dry_run") == "true" {
+		result, err := h.svc.DryRunStaticIP(name, req)
+		if err != nil {
+			writeStaticIPError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
+
+	if r.Header.Get("X-Confirm") != "true" {
+		writePreconditionRequired(w)
+		return
+	}
+
 	iface, err := h.svc.SetStaticIP(name, req)
 	if err != nil {
-		if errors.Is(err, errInvalidCIDR) || errors.Is(err, errInvalidGW) ||
-			errors.Is(err, errEmptyIP) || errors.Is(err, errEmptyGateway) ||
-			errors.Is(err, errIPv6NotSupported) || errors.Is(err, errGWNotInSubnet) ||
-			errors.Is(err, errGWEqualsIP) || errors.Is(err, errInvalidIfaceName) {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		if errors.Is(err, errIfaceNotFound) {
-			writeError(w, http.StatusNotFound, err.Error())
-			return
-		}
-		if errors.Is(err, errNotLinux) {
-			writeError(w, http.StatusServiceUnavailable, err.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeStaticIPError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, iface)
@@ -130,17 +130,24 @@ func (h *handler) handleSetDNS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.URL.Query().Get("dry_run") == "true" {
+		result, err := h.svc.DryRunDNS(req)
+		if err != nil {
+			writeDNSError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
+
+	if r.Header.Get("X-Confirm") != "true" {
+		writePreconditionRequired(w)
+		return
+	}
+
 	dns, err := h.svc.SetDNS(req)
 	if err != nil {
-		if errors.Is(err, errNotLinux) {
-			writeError(w, http.StatusServiceUnavailable, err.Error())
-			return
-		}
-		if errors.Is(err, errInvalidNameserver) || errors.Is(err, errInvalidSearchDom) {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeDNSError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, dns)
@@ -174,5 +181,48 @@ func writeError(w http.ResponseWriter, status int, message string) {
 		},
 	}); err != nil {
 		slog.Error("failed to write error response", "plugin", "network", "error", err)
+	}
+}
+
+func writeStaticIPError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errInvalidCIDR) || errors.Is(err, errInvalidGW) ||
+		errors.Is(err, errEmptyIP) || errors.Is(err, errEmptyGateway) ||
+		errors.Is(err, errIPv6NotSupported) || errors.Is(err, errGWNotInSubnet) ||
+		errors.Is(err, errGWEqualsIP) || errors.Is(err, errInvalidIfaceName) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, errIfaceNotFound) {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if errors.Is(err, errNotLinux) {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	writeError(w, http.StatusInternalServerError, err.Error())
+}
+
+func writeDNSError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errNotLinux) {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	if errors.Is(err, errInvalidNameserver) || errors.Is(err, errInvalidSearchDom) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeError(w, http.StatusInternalServerError, err.Error())
+}
+
+func writePreconditionRequired(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusPreconditionRequired)
+	if err := json.NewEncoder(w).Encode(map[string]string{
+		"error":        "confirmation required",
+		"message":      "This operation will modify network configuration. Set X-Confirm: true header to proceed.",
+		"dry_run_hint": "Use ?dry_run=true to preview changes first.",
+	}); err != nil {
+		slog.Error("failed to write precondition response", "plugin", "network", "error", err)
 	}
 }

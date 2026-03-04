@@ -59,6 +59,18 @@ All routes are relative to the plugin mount point
 | PUT    | /interfaces/{name}  | Set static IP for an interface     |
 | GET    | /dns                | Get current DNS configuration      |
 | PUT    | /dns                | Update DNS configuration           |
+
+### Query Parameters
+
+| Parameter  | Applies To               | Description                                   |
+| ---------- | ------------------------ | --------------------------------------------- |
+| `dry_run`  | PUT /interfaces, PUT /dns | When `true`, validates and previews changes without applying them. Returns a `DryRunResult` with current vs proposed config and a change summary. |
+
+### Required Headers
+
+| Header      | Applies To               | Description                                   |
+| ----------- | ------------------------ | --------------------------------------------- |
+| `X-Confirm` | PUT /interfaces, PUT /dns | Must be set to `true` for mutating operations. Without it, the server returns **428 Precondition Required** with a description of what would change. This prevents accidental network disruption from scripts or UI bugs. |
 | GET    | /status             | Show overall network status        |
 
 ---
@@ -90,6 +102,21 @@ All routes are relative to the plugin mount point
   abuse.
 - **Concurrency** — all mutating operations are serialized via a mutex to
   prevent interleaved config writes on the same interface.
+- **Rollback on failure** — before applying a new static IP configuration,
+  the current config file is backed up. If `ifup` fails after writing the
+  new config, the backup is automatically restored and `ifup` is retried
+  with the old configuration. On successful rollback, the backup file is
+  removed. If the restore itself fails, the backup file is **preserved** on
+  disk for manual recovery and the error includes the backup path. The same
+  backup/restore pattern applies to DNS writes.
+- **Dry-run support** — `PUT /interfaces/{name}?dry_run=true` and
+  `PUT /dns?dry_run=true` validate the request and return a preview of
+  what would change (current vs proposed config, human-readable diff)
+  without modifying any files or running any commands.
+- **Confirmation requirement** — mutating PUT operations require the
+  `X-Confirm: true` header. Without it, the server responds with
+  **428 Precondition Required** and a message describing the operation.
+  This prevents accidental network disruption from automated clients.
 
 ---
 
