@@ -65,13 +65,13 @@ All routes are relative to the plugin mount point
 
 | Parameter  | Applies To               | Description                                   |
 | ---------- | ------------------------ | --------------------------------------------- |
-| `dry_run`  | PUT /interfaces, PUT /dns | When `true`, validates and previews changes without applying them. Returns a `DryRunResult` with current vs proposed config and a change summary. |
+| `dry_run`  | PUT /interfaces/{name}, PUT /dns | When `true`, validates and previews changes without applying them. Returns a `DryRunResult` with current vs proposed config and a change summary. |
 
 ### Required Headers
 
 | Header      | Applies To               | Description                                   |
 | ----------- | ------------------------ | --------------------------------------------- |
-| `X-Confirm` | PUT /interfaces, PUT /dns | Must be set to `true` for mutating operations. Without it, the server returns **428 Precondition Required** with a description of what would change. This prevents accidental network disruption from scripts or UI bugs. |
+| `X-Confirm` | PUT /interfaces/{name}, PUT /dns | Must be set to `true` for mutating operations. Without it, the server returns **428 Precondition Required** with a `dry_run` hint describing how to preview the proposed changes safely. This prevents accidental network disruption from scripts or UI bugs. |
 
 ---
 

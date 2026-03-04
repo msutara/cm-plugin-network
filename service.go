@@ -703,7 +703,7 @@ func backupConfigFile(configPath string) (string, error) {
 		}
 		return "", fmt.Errorf("backup read: %w", err)
 	}
-	if err := os.WriteFile(backupPath, data, 0o644); err != nil {
+	if err := atomicWriteFile(backupPath, data, 0o644); err != nil {
 		return "", fmt.Errorf("backup write: %w", err)
 	}
 	return backupPath, nil
@@ -715,7 +715,7 @@ func restoreConfigFile(backupPath, configPath string) error {
 	if err != nil {
 		return fmt.Errorf("restore read: %w", err)
 	}
-	if err := os.WriteFile(configPath, data, 0o644); err != nil {
+	if err := atomicWriteFile(configPath, data, 0o644); err != nil {
 		return fmt.Errorf("restore write: %w", err)
 	}
 	_ = os.Remove(backupPath)
