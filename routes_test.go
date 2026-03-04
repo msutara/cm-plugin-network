@@ -442,15 +442,22 @@ func TestPutInterface_NoConfirmHeader(t *testing.T) {
 		t.Fatalf("got %d, want %d", w.Code, http.StatusPreconditionRequired)
 	}
 
+	msg := extractErrorMessage(t, w.Body.Bytes())
+	if !strings.Contains(msg, "confirmation required") {
+		t.Errorf("expected error containing 'confirmation required', got %q", msg)
+	}
+
 	var resp map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
-	if resp["error"] != "confirmation required" {
-		t.Errorf("expected error 'confirmation required', got %v", resp["error"])
+	errObj := resp["error"].(map[string]any)
+	details, ok := errObj["details"].(map[string]any)
+	if !ok {
+		t.Fatal("expected details in error envelope")
 	}
-	if resp["dry_run_hint"] == nil {
-		t.Error("expected dry_run_hint in response")
+	if details["dry_run_hint"] == nil {
+		t.Error("expected dry_run_hint in details")
 	}
 }
 
@@ -533,11 +540,8 @@ func TestPutDNS_NoConfirmHeader(t *testing.T) {
 		t.Fatalf("got %d, want %d", w.Code, http.StatusPreconditionRequired)
 	}
 
-	var resp map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-	if resp["error"] != "confirmation required" {
-		t.Errorf("expected error 'confirmation required', got %v", resp["error"])
+	msg := extractErrorMessage(t, w.Body.Bytes())
+	if !strings.Contains(msg, "confirmation required") {
+		t.Errorf("expected error containing 'confirmation required', got %q", msg)
 	}
 }

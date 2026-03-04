@@ -59,6 +59,7 @@ All routes are relative to the plugin mount point
 | PUT    | /interfaces/{name}  | Set static IP for an interface     |
 | GET    | /dns                | Get current DNS configuration      |
 | PUT    | /dns                | Update DNS configuration           |
+| GET    | /status             | Show overall network status        |
 
 ### Query Parameters
 
@@ -71,7 +72,6 @@ All routes are relative to the plugin mount point
 | Header      | Applies To               | Description                                   |
 | ----------- | ------------------------ | --------------------------------------------- |
 | `X-Confirm` | PUT /interfaces, PUT /dns | Must be set to `true` for mutating operations. Without it, the server returns **428 Precondition Required** with a description of what would change. This prevents accidental network disruption from scripts or UI bugs. |
-| GET    | /status             | Show overall network status        |
 
 ---
 

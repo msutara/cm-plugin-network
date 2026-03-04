@@ -272,6 +272,9 @@ func (s *Service) SetStaticIP(name string, req StaticIPRequest) (*Interface, err
 	}
 
 	if err := atomicWriteFile(confPath, []byte(config), 0o644); err != nil {
+		if backupPath != "" {
+			_ = os.Remove(backupPath) // no change applied, backup unnecessary
+		}
 		return nil, fmt.Errorf("writing interface config: %w", err)
 	}
 	slog.Info("wrote static IP config", "plugin", "network", "interface", name, "path", confPath)
@@ -405,6 +408,9 @@ func (s *Service) SetDNS(cfg DNSConfig) (*DNSConfig, error) {
 	}
 
 	if err := atomicWriteFile(targetPath, []byte(b.String()), 0o644); err != nil {
+		if backupPath != "" {
+			_ = os.Remove(backupPath) // no change applied, backup unnecessary
+		}
 		return nil, fmt.Errorf("writing resolv.conf: %w", err)
 	}
 	slog.Info("wrote DNS config", "plugin", "network", "nameservers", cfg.Nameservers)
@@ -685,6 +691,9 @@ func resolveSymlink(path string) string {
 
 // backupConfigFile copies the current config to a .bak file.
 // Returns the backup path, or empty string if no existing config to back up.
+// NOTE: This intentionally overwrites any existing .bak file. The operator
+// should recover from a previous .bak before triggering a new operation.
+// Timestamped backups or overwrite-refusal may be added in a future PR.
 func backupConfigFile(configPath string) (string, error) {
 	backupPath := configPath + ".bak"
 	data, err := os.ReadFile(configPath)

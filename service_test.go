@@ -917,7 +917,7 @@ func TestSetStaticIP_NoBackupForNewInterface(t *testing.T) {
 	}
 }
 
-func TestSetDNS_RollbackOnWriteFailure(t *testing.T) {
+func TestSetDNS_BackupFailsOnReadOnlyDir(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("skipping Linux-only test")
 	}

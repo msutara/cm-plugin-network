@@ -215,14 +215,25 @@ func writeDNSError(w http.ResponseWriter, err error) {
 	writeError(w, http.StatusInternalServerError, err.Error())
 }
 
-func writePreconditionRequired(w http.ResponseWriter) {
+func writeErrorWithDetails(w http.ResponseWriter, status int, message string, details map[string]any) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusPreconditionRequired)
-	if err := json.NewEncoder(w).Encode(map[string]string{
-		"error":        "confirmation required",
-		"message":      "This operation will modify network configuration. Set X-Confirm: true header to proceed.",
-		"dry_run_hint": "Use ?dry_run=true to preview changes first.",
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"error": map[string]any{
+			"code":    status,
+			"message": message,
+			"details": details,
+		},
 	}); err != nil {
-		slog.Error("failed to write precondition response", "plugin", "network", "error", err)
+		slog.Error("failed to write error response", "plugin", "network", "error", err)
 	}
+}
+
+func writePreconditionRequired(w http.ResponseWriter) {
+	writeErrorWithDetails(w, http.StatusPreconditionRequired,
+		"confirmation required: This operation will modify network configuration. Set X-Confirm: true header to proceed.",
+		map[string]any{
+			"dry_run_hint": "Use ?dry_run=true to preview changes first.",
+		},
+	)
 }
