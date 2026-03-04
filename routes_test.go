@@ -122,6 +122,7 @@ func TestHandleSetStaticIP_BadCIDR(t *testing.T) {
 	body := `{"ip": "10.0.0.1", "gateway": "10.0.0.254"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/interfaces/eth0", bytes.NewBufferString(body))
+	r.Header.Set("X-Confirm", "true")
 	testRouter().ServeHTTP(w, r)
 
 	if w.Code != http.StatusBadRequest {
@@ -225,6 +226,7 @@ func TestHandleSetStaticIP_GWNotInSubnet(t *testing.T) {
 	body := `{"ip": "192.168.1.10/24", "gateway": "10.0.0.1"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/interfaces/eth0", bytes.NewBufferString(body))
+	r.Header.Set("X-Confirm", "true")
 	testRouter().ServeHTTP(w, r)
 
 	if w.Code != http.StatusBadRequest {
@@ -240,6 +242,7 @@ func TestHandleSetStaticIP_GWEqualsIP(t *testing.T) {
 	body := `{"ip": "192.168.1.10/24", "gateway": "192.168.1.10"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/interfaces/eth0", bytes.NewBufferString(body))
+	r.Header.Set("X-Confirm", "true")
 	testRouter().ServeHTTP(w, r)
 
 	if w.Code != http.StatusBadRequest {
@@ -276,6 +279,7 @@ func TestHandleSetDNS_InvalidNameserver(t *testing.T) {
 	body := `{"nameservers": ["not-an-ip", "8.8.8.8"]}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/dns", bytes.NewBufferString(body))
+	r.Header.Set("X-Confirm", "true")
 	router.ServeHTTP(w, r)
 
 	if w.Code != http.StatusBadRequest {
@@ -296,6 +300,7 @@ func TestHandleSetDNS_InvalidSearchDomain(t *testing.T) {
 	body := `{"nameservers": ["8.8.8.8"], "search": ["valid.com", "inval!d"]}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/dns", bytes.NewBufferString(body))
+	r.Header.Set("X-Confirm", "true")
 	router.ServeHTTP(w, r)
 
 	if w.Code != http.StatusBadRequest {
@@ -316,6 +321,7 @@ func TestHandleSetStaticIP_EmptyFields(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
 			r := httptest.NewRequest(http.MethodPut, "/interfaces/eth0", bytes.NewBufferString(tc.body))
+			r.Header.Set("X-Confirm", "true")
 			testRouter().ServeHTTP(w, r)
 
 			if w.Code != http.StatusBadRequest {
@@ -329,6 +335,7 @@ func TestHandleSetStaticIP_IPv6Rejected(t *testing.T) {
 	body := `{"ip": "fe80::1/64", "gateway": "fe80::1"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/interfaces/eth0", bytes.NewBufferString(body))
+	r.Header.Set("X-Confirm", "true")
 	testRouter().ServeHTTP(w, r)
 
 	if w.Code != http.StatusBadRequest {
@@ -355,6 +362,7 @@ func TestHandleSetStaticIP_IPv4MappedIPv6Gateway(t *testing.T) {
 	body := `{"ip": "192.168.1.10/24", "gateway": "::ffff:192.168.1.1"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/interfaces/lo", bytes.NewBufferString(body))
+	r.Header.Set("X-Confirm", "true")
 	router.ServeHTTP(w, r)
 
 	// With /bin/true stubs, config file is always written.
@@ -371,4 +379,169 @@ func TestHandleSetStaticIP_IPv4MappedIPv6Gateway(t *testing.T) {
 	}
 	// Unit tests in service_test.go directly assert canonicalization;
 	// this route test verifies the full HTTP path doesn't bypass it.
+}
+
+func TestPutInterface_DryRun(t *testing.T) {
+	dir := t.TempDir()
+	confPath := filepath.Join(dir, "eth0")
+	oldConfig := "auto eth0\niface eth0 inet static\n    address 10.0.0.1\n    netmask 255.255.255.0\n    gateway 10.0.0.254\n"
+	if err := os.WriteFile(confPath, []byte(oldConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := &Service{
+		interfacesDirPath: dir,
+		resolvPath:        filepath.Join(dir, "resolv.conf"),
+	}
+	router := newRouter(svc)
+
+	body := `{"ip": "192.168.1.10/24", "gateway": "192.168.1.1"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/interfaces/eth0?dry_run=true", bytes.NewBufferString(body))
+	router.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if result["valid"] != true {
+		t.Errorf("expected valid=true, got %v", result["valid"])
+	}
+	if result["proposed_config"] == nil || result["proposed_config"] == "" {
+		t.Error("expected non-empty proposed_config")
+	}
+	if result["current_config"] == nil || result["current_config"] == "" {
+		t.Error("expected non-empty current_config")
+	}
+	changes, ok := result["changes"].([]any)
+	if !ok || len(changes) == 0 {
+		t.Errorf("expected non-empty changes, got %v", result["changes"])
+	}
+
+	// Verify file was NOT modified
+	got, err := os.ReadFile(confPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != oldConfig {
+		t.Errorf("dry-run should not modify file: got %q, want %q", string(got), oldConfig)
+	}
+}
+
+func TestPutInterface_NoConfirmHeader(t *testing.T) {
+	body := `{"ip": "192.168.1.10/24", "gateway": "192.168.1.1"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/interfaces/eth0", bytes.NewBufferString(body))
+	testRouter().ServeHTTP(w, r)
+
+	if w.Code != http.StatusPreconditionRequired {
+		t.Fatalf("got %d, want %d", w.Code, http.StatusPreconditionRequired)
+	}
+
+	msg := extractErrorMessage(t, w.Body.Bytes())
+	if !strings.Contains(msg, "confirmation required") {
+		t.Errorf("expected error containing 'confirmation required', got %q", msg)
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	errObj := resp["error"].(map[string]any)
+	details, ok := errObj["details"].(map[string]any)
+	if !ok {
+		t.Fatal("expected details in error envelope")
+	}
+	if details["dry_run_hint"] == nil {
+		t.Error("expected dry_run_hint in details")
+	}
+}
+
+func TestPutInterface_WithConfirmHeader(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("skipping Linux-only test")
+	}
+	dir := t.TempDir()
+	svc := &Service{
+		interfacesDirPath: dir,
+		resolvPath:        filepath.Join(dir, "resolv.conf"),
+		cmdTimeout:        5 * time.Second,
+		ifdownPath:        "/bin/true",
+		ifupPath:          "/bin/true",
+	}
+	router := newRouter(svc)
+
+	body := `{"ip": "192.168.1.10/24", "gateway": "192.168.1.1"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/interfaces/lo", bytes.NewBufferString(body))
+	r.Header.Set("X-Confirm", "true")
+	router.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+}
+
+func TestPutDNS_DryRun(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+	oldContent := "nameserver 9.9.9.9\n"
+	if err := os.WriteFile(resolvPath, []byte(oldContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := &Service{
+		resolvPath:        resolvPath,
+		interfacesDirPath: dir,
+	}
+	router := newRouter(svc)
+
+	body := `{"nameservers": ["8.8.8.8", "1.1.1.1"], "search": ["example.com"]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/dns?dry_run=true", bytes.NewBufferString(body))
+	router.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if result["valid"] != true {
+		t.Errorf("expected valid=true, got %v", result["valid"])
+	}
+	if result["proposed_config"] == nil || result["proposed_config"] == "" {
+		t.Error("expected non-empty proposed_config")
+	}
+
+	// Verify file was NOT modified
+	got, err := os.ReadFile(resolvPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != oldContent {
+		t.Errorf("dry-run should not modify file: got %q, want %q", string(got), oldContent)
+	}
+}
+
+func TestPutDNS_NoConfirmHeader(t *testing.T) {
+	body := `{"nameservers": ["8.8.8.8"]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/dns", bytes.NewBufferString(body))
+	testRouter().ServeHTTP(w, r)
+
+	if w.Code != http.StatusPreconditionRequired {
+		t.Fatalf("got %d, want %d", w.Code, http.StatusPreconditionRequired)
+	}
+
+	msg := extractErrorMessage(t, w.Body.Bytes())
+	if !strings.Contains(msg, "confirmation required") {
+		t.Errorf("expected error containing 'confirmation required', got %q", msg)
+	}
 }

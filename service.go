@@ -40,6 +40,14 @@ type DNSConfig struct {
 	Search      []string `json:"search"`
 }
 
+// DryRunResult holds the result of a dry-run validation without applying changes.
+type DryRunResult struct {
+	Valid    bool     `json:"valid"`
+	Current  string   `json:"current_config,omitempty"`
+	Proposed string   `json:"proposed_config"`
+	Changes  []string `json:"changes"`
+}
+
 // StaticIPRequest is the payload for setting a static IP on an interface.
 type StaticIPRequest struct {
 	IP      string `json:"ip"`
@@ -256,7 +264,17 @@ func (s *Service) SetStaticIP(name string, req StaticIPRequest) (*Interface, err
 		name, name, ip.String(), netmask, req.Gateway)
 
 	confPath := filepath.Join(s.interfacesDirPath, name)
+
+	// Back up existing config so we can rollback if ifup fails.
+	backupPath, err := backupConfigFile(confPath)
+	if err != nil {
+		return nil, fmt.Errorf("backing up interface config: %w", err)
+	}
+
 	if err := atomicWriteFile(confPath, []byte(config), 0o644); err != nil {
+		if backupPath != "" {
+			_ = os.Remove(backupPath) // no change applied, backup unnecessary
+		}
 		return nil, fmt.Errorf("writing interface config: %w", err)
 	}
 	slog.Info("wrote static IP config", "plugin", "network", "interface", name, "path", confPath)
@@ -273,7 +291,34 @@ func (s *Service) SetStaticIP(name string, req StaticIPRequest) (*Interface, err
 	defer cancelUp()
 
 	if out, err := exec.CommandContext(ctxUp, s.ifupPath, name).CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("ifup %s failed: %w: %s", name, err, string(out))
+		ifupErr := fmt.Errorf("ifup %s failed: %w: %s", name, err, string(out))
+
+		if backupPath != "" {
+			if restErr := restoreConfigFile(backupPath, confPath); restErr != nil {
+				slog.Error("rollback failed; backup preserved for manual recovery",
+					"plugin", "network", "interface", name, "backup", backupPath)
+				return nil, fmt.Errorf("%w; rollback also failed: %v; backup kept at %s", ifupErr, restErr, backupPath)
+			}
+			slog.Info("restored config backup after ifup failure", "plugin", "network", "interface", name)
+
+			ctxReUp, cancelReUp := context.WithTimeout(context.Background(), s.cmdTimeout)
+			defer cancelReUp()
+
+			if out2, err2 := exec.CommandContext(ctxReUp, s.ifupPath, name).CombinedOutput(); err2 != nil {
+				slog.Error("rollback ifup also failed; backup preserved for manual recovery",
+					"plugin", "network", "interface", name, "backup", backupPath)
+				return nil, fmt.Errorf("%w; rollback ifup also failed: %v: %s; backup kept at %s", ifupErr, err2, string(out2), backupPath)
+			}
+			// Rollback succeeded — safe to remove backup.
+			_ = os.Remove(backupPath)
+		}
+
+		return nil, ifupErr
+	}
+
+	// Success — clean up backup.
+	if backupPath != "" {
+		_ = os.Remove(backupPath)
 	}
 
 	return s.getInterfaceUnlocked(name)
@@ -356,12 +401,43 @@ func (s *Service) SetDNS(cfg DNSConfig) (*DNSConfig, error) {
 		fmt.Fprintf(&b, "search %s\n", strings.Join(cfg.Search, " "))
 	}
 
-	if err := atomicWriteFile(resolveSymlink(s.resolvPath), []byte(b.String()), 0o644); err != nil {
+	targetPath := resolveSymlink(s.resolvPath)
+
+	// Back up existing config so we can rollback on failure.
+	backupPath, err := backupConfigFile(targetPath)
+	if err != nil {
+		return nil, fmt.Errorf("backing up DNS config: %w", err)
+	}
+
+	if err := atomicWriteFile(targetPath, []byte(b.String()), 0o644); err != nil {
+		if backupPath != "" {
+			_ = os.Remove(backupPath) // no change applied, backup unnecessary
+		}
 		return nil, fmt.Errorf("writing resolv.conf: %w", err)
 	}
 	slog.Info("wrote DNS config", "plugin", "network", "nameservers", cfg.Nameservers)
 
-	return parseResolvConf(s.resolvPath)
+	result, err := parseResolvConf(s.resolvPath)
+	if err != nil {
+		if backupPath != "" {
+			if restErr := restoreConfigFile(backupPath, targetPath); restErr != nil {
+				slog.Error("DNS rollback failed; backup preserved for manual recovery",
+					"plugin", "network", "backup", backupPath)
+				return nil, fmt.Errorf("verifying DNS config: %w; rollback also failed: %v; backup kept at %s", err, restErr, backupPath)
+			}
+			slog.Info("restored DNS config backup after verification failure", "plugin", "network")
+			// Rollback succeeded — safe to remove backup.
+			_ = os.Remove(backupPath)
+		}
+		return nil, fmt.Errorf("verifying DNS config: %w", err)
+	}
+
+	// Success — clean up backup.
+	if backupPath != "" {
+		_ = os.Remove(backupPath)
+	}
+
+	return result, nil
 }
 
 // GetNetworkStatus returns overall network connectivity status.
@@ -394,6 +470,123 @@ func (s *Service) GetNetworkStatus() (*NetworkStatus, error) {
 	}
 
 	return status, nil
+}
+
+// DryRunStaticIP validates a static IP request and returns what would change
+// without writing any files or restarting the interface.
+func (s *Service) DryRunStaticIP(ifaceName string, req StaticIPRequest) (*DryRunResult, error) {
+	if err := validateStaticIPRequest(&req); err != nil {
+		return nil, err
+	}
+	if !validIfaceName.MatchString(ifaceName) {
+		return nil, errInvalidIfaceName
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	ip, ipNet, err := net.ParseCIDR(req.IP)
+	if err != nil {
+		return nil, errInvalidCIDR
+	}
+	netmask := net.IP(ipNet.Mask).String()
+
+	proposed := fmt.Sprintf("auto %s\niface %s inet static\n    address %s\n    netmask %s\n    gateway %s\n",
+		ifaceName, ifaceName, ip.String(), netmask, req.Gateway)
+
+	confPath := filepath.Join(s.interfacesDirPath, ifaceName)
+	var current string
+	if data, err := os.ReadFile(confPath); err == nil {
+		current = string(data)
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read current config: %w", err)
+	}
+
+	return &DryRunResult{
+		Valid:    true,
+		Current:  current,
+		Proposed: proposed,
+		Changes:  diffConfigs(current, proposed),
+	}, nil
+}
+
+// DryRunDNS validates a DNS configuration and returns what would change
+// without writing any files.
+func (s *Service) DryRunDNS(req DNSConfig) (*DryRunResult, error) {
+	var b strings.Builder
+	b.WriteString("# Generated by cm-plugin-network\n")
+	for _, ns := range req.Nameservers {
+		if net.ParseIP(ns) == nil {
+			return nil, fmt.Errorf("%w: %q", errInvalidNameserver, ns)
+		}
+		fmt.Fprintf(&b, "nameserver %s\n", ns)
+	}
+	for _, dom := range req.Search {
+		if !validSearchDomain.MatchString(dom) {
+			return nil, fmt.Errorf("%w: %q", errInvalidSearchDom, dom)
+		}
+	}
+	if len(req.Search) > 0 {
+		fmt.Fprintf(&b, "search %s\n", strings.Join(req.Search, " "))
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	proposed := b.String()
+	var current string
+	if data, err := os.ReadFile(s.resolvPath); err == nil {
+		current = string(data)
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read current config: %w", err)
+	}
+
+	return &DryRunResult{
+		Valid:    true,
+		Current:  current,
+		Proposed: proposed,
+		Changes:  diffConfigs(current, proposed),
+	}, nil
+}
+
+// diffConfigs compares current and proposed configs and returns human-readable changes.
+func diffConfigs(current, proposed string) []string {
+	if current == "" {
+		return []string{"new file will be created"}
+	}
+	if current == proposed {
+		return []string{"no changes"}
+	}
+
+	currentLines := strings.Split(strings.TrimSpace(current), "\n")
+	proposedLines := strings.Split(strings.TrimSpace(proposed), "\n")
+
+	currentSet := make(map[string]bool, len(currentLines))
+	for _, l := range currentLines {
+		currentSet[strings.TrimSpace(l)] = true
+	}
+	proposedSet := make(map[string]bool, len(proposedLines))
+	for _, l := range proposedLines {
+		proposedSet[strings.TrimSpace(l)] = true
+	}
+
+	var changes []string
+	for _, l := range currentLines {
+		trimmed := strings.TrimSpace(l)
+		if trimmed != "" && !proposedSet[trimmed] {
+			changes = append(changes, "- "+trimmed)
+		}
+	}
+	for _, l := range proposedLines {
+		trimmed := strings.TrimSpace(l)
+		if trimmed != "" && !currentSet[trimmed] {
+			changes = append(changes, "+ "+trimmed)
+		}
+	}
+	if len(changes) == 0 {
+		changes = []string{"no changes"}
+	}
+	return changes
 }
 
 // getInterfaceUnlocked reads interface info without acquiring the lock.
@@ -496,6 +689,43 @@ func resolveSymlink(path string) string {
 		return path
 	}
 	return target
+}
+
+// backupConfigFile copies the current config to a .bak file.
+// Returns the backup path, or empty string if no existing config to back up.
+// NOTE: This intentionally overwrites any existing .bak file. The operator
+// should recover from a previous .bak before triggering a new operation.
+// Timestamped backups or overwrite-refusal may be added in a future PR.
+func backupConfigFile(configPath string) (string, error) {
+	backupPath := configPath + ".bak"
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("backup read: %w", err)
+	}
+	if err := atomicWriteFile(backupPath, data, 0o644); err != nil {
+		return "", fmt.Errorf("backup write: %w", err)
+	}
+	return backupPath, nil
+}
+
+// restoreConfigFile restores a backup to the original config path.
+// The caller is responsible for removing the backup file after
+// confirming the restore was successful (e.g. ifup succeeded).
+func restoreConfigFile(backupPath, configPath string) error {
+	data, err := os.ReadFile(backupPath)
+	if err != nil {
+		return fmt.Errorf("restore read: %w", err)
+	}
+	if err := atomicWriteFile(configPath, data, 0o644); err != nil {
+		return fmt.Errorf("restore write: %w", err)
+	}
+	// NOTE: caller is responsible for removing the backup file.
+	// In SetStaticIP the backup must survive a failed rollback ifup
+	// so the operator can recover manually.
+	return nil
 }
 
 // defaultGatewayLinux parses /proc/net/route for the default gateway.
