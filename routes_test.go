@@ -344,16 +344,18 @@ func TestHandleSetStaticIP_IPv4MappedIPv6Gateway(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPut, "/interfaces/eth0", bytes.NewBufferString(body))
 	router.ServeHTTP(w, r)
 
-	// Regardless of HTTP status (eth0 likely doesn't exist → 404), if the
-	// config file was written it must contain canonical IPv4, never ::ffff:.
+	// With /bin/true stubs, config file is always written regardless of
+	// whether eth0 exists as a real OS interface. Assert it was written.
 	confPath := filepath.Join(dir, "eth0")
-	if got, err := os.ReadFile(confPath); err == nil {
-		if strings.Contains(string(got), "::ffff") {
-			t.Error("config file contains un-canonicalized IPv4-mapped IPv6 gateway")
-		}
-		if !strings.Contains(string(got), "gateway 192.168.1.1") {
-			t.Errorf("config file missing canonicalized gateway, got: %s", got)
-		}
+	got, err := os.ReadFile(confPath)
+	if err != nil {
+		t.Fatalf("config file not written: %v", err)
+	}
+	if strings.Contains(string(got), "::ffff") {
+		t.Error("config file contains un-canonicalized IPv4-mapped IPv6 gateway")
+	}
+	if !strings.Contains(string(got), "gateway 192.168.1.1") {
+		t.Errorf("config file missing canonicalized gateway, got: %s", got)
 	}
 	// Unit tests in service_test.go directly assert canonicalization;
 	// this route test verifies the full HTTP path doesn't bypass it.

@@ -444,9 +444,12 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 		}
 	}()
 
-	if _, err := tmp.Write(data); err != nil {
+	if n, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("writing temp file: %w", err)
+	} else if n != len(data) {
+		_ = tmp.Close()
+		return fmt.Errorf("short write: %d of %d bytes", n, len(data))
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
