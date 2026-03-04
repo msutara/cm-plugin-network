@@ -440,16 +440,16 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	success := false
 	defer func() {
 		if !success {
-			os.Remove(tmpName)
+			_ = os.Remove(tmpName)
 		}
 	}()
 
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("writing temp file: %w", err)
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("syncing temp file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
@@ -464,8 +464,8 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 
 	// Sync the parent directory to ensure the rename is durable on power loss.
 	if d, err := os.Open(filepath.Dir(path)); err == nil {
-		d.Sync() //nolint:errcheck // best-effort durability
-		d.Close()
+		d.Sync()  //nolint:errcheck // best-effort durability
+		d.Close() //nolint:errcheck // best-effort close
 	}
 
 	success = true

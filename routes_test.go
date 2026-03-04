@@ -60,6 +60,15 @@ func TestHandleGetInterface_InvalidName(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("got %d, want %d", w.Code, http.StatusBadRequest)
 	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	errObj := resp["error"].(map[string]any)
+	msg := errObj["message"].(string)
+	if !strings.Contains(msg, "invalid interface name") {
+		t.Errorf("error message should mention 'invalid interface name', got %q", msg)
+	}
 }
 
 func TestHandleSetStaticIP_InvalidName(t *testing.T) {
@@ -70,6 +79,15 @@ func TestHandleSetStaticIP_InvalidName(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("got %d, want %d", w.Code, http.StatusBadRequest)
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	errObj := resp["error"].(map[string]any)
+	msg := errObj["message"].(string)
+	if !strings.Contains(msg, "invalid interface name") {
+		t.Errorf("error message should mention 'invalid interface name', got %q", msg)
 	}
 }
 
@@ -306,45 +324,6 @@ func TestHandleSetStaticIP_IPv6Rejected(t *testing.T) {
 	}
 }
 
-func TestHandleGetInterface_InvalidNameErrorMessage(t *testing.T) {
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/interfaces/bad$name", nil)
-	testRouter().ServeHTTP(w, r)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("got %d, want %d", w.Code, http.StatusBadRequest)
-	}
-	var resp map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-	errObj := resp["error"].(map[string]any)
-	msg := errObj["message"].(string)
-	if !strings.Contains(msg, "invalid interface name") {
-		t.Errorf("error message should mention 'invalid interface name', got %q", msg)
-	}
-}
-
-func TestHandleSetStaticIP_InvalidNameErrorMessage(t *testing.T) {
-	body := `{"ip": "10.0.0.1/24", "gateway": "10.0.0.254"}`
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/interfaces/bad$name", bytes.NewBufferString(body))
-	testRouter().ServeHTTP(w, r)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("got %d, want %d", w.Code, http.StatusBadRequest)
-	}
-	var resp map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-	errObj := resp["error"].(map[string]any)
-	msg := errObj["message"].(string)
-	if !strings.Contains(msg, "invalid interface name") {
-		t.Errorf("error message should mention 'invalid interface name', got %q", msg)
-	}
-}
-
 func TestHandleSetStaticIP_IPv4MappedIPv6Gateway(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("skipping Linux-only test")
@@ -355,8 +334,8 @@ func TestHandleSetStaticIP_IPv4MappedIPv6Gateway(t *testing.T) {
 		resolvPath:        filepath.Join(dir, "resolv.conf"),
 		interfacesDirPath: dir,
 		cmdTimeout:        5 * time.Second,
-		ifdownPath:        "/sbin/ifdown",
-		ifupPath:          "/sbin/ifup",
+		ifdownPath:        "/bin/true",
+		ifupPath:          "/bin/true",
 	}
 	router := newRouter(svc)
 

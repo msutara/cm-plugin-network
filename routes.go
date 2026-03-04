@@ -53,7 +53,11 @@ func (h *handler) handleGetInterface(w http.ResponseWriter, r *http.Request) {
 	}
 	iface, err := h.svc.GetInterface(name)
 	if err != nil {
-		if errors.Is(err, errIfaceNotFound) || errors.Is(err, errInvalidIfaceName) {
+		if errors.Is(err, errInvalidIfaceName) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if errors.Is(err, errIfaceNotFound) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
