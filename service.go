@@ -305,7 +305,9 @@ func (s *Service) SetStaticIP(name string, req StaticIPRequest) (*Interface, err
 			defer cancelReUp()
 
 			if out2, err2 := exec.CommandContext(ctxReUp, s.ifupPath, name).CombinedOutput(); err2 != nil {
-				return nil, fmt.Errorf("%w; rollback ifup also failed: %v: %s", ifupErr, err2, string(out2))
+				slog.Error("rollback ifup also failed; backup preserved for manual recovery",
+					"plugin", "network", "interface", name, "backup", backupPath)
+				return nil, fmt.Errorf("%w; rollback ifup also failed: %v: %s; backup kept at %s", ifupErr, err2, string(out2), backupPath)
 			}
 			// Rollback succeeded — safe to remove backup.
 			_ = os.Remove(backupPath)
@@ -718,7 +720,9 @@ func restoreConfigFile(backupPath, configPath string) error {
 	if err := atomicWriteFile(configPath, data, 0o644); err != nil {
 		return fmt.Errorf("restore write: %w", err)
 	}
-	_ = os.Remove(backupPath)
+	// NOTE: caller is responsible for removing the backup file.
+	// In SetStaticIP the backup must survive a failed rollback ifup
+	// so the operator can recover manually.
 	return nil
 }
 

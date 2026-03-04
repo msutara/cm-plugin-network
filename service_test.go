@@ -800,8 +800,9 @@ func TestRestoreConfigFile(t *testing.T) {
 		t.Errorf("restored content: got %q, want %q", got, originalContent)
 	}
 
-	if _, err := os.Stat(backupPath); !os.IsNotExist(err) {
-		t.Error("backup file should have been removed after restore")
+	// restoreConfigFile no longer removes the backup — caller decides.
+	if _, err := os.Stat(backupPath); err != nil {
+		t.Error("backup file should still exist after restore (caller removes it)")
 	}
 }
 

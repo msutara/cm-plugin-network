@@ -22,10 +22,11 @@ headless Debian-based nodes (Raspbian Bookworm ARM64, Debian Bullseye slim).
 
 ### Dry-Run Mode
 
-Preview changes before applying them by adding `?dry_run=true` to any PUT
-request. The server validates the input and returns a `DryRunResult` JSON
-object with the current config, proposed config, and a human-readable change
-summary — without modifying any files or restarting services.
+Preview changes before applying them by adding `?dry_run=true` to
+`PUT /interfaces/{name}` or `PUT /dns`. The server validates the input and
+returns a `DryRunResult` JSON object with the current config, proposed config,
+and a human-readable change summary — without modifying any files or restarting
+services.
 
 ```bash
 curl -s -X PUT \
