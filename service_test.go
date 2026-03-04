@@ -573,6 +573,17 @@ func TestValidateStaticIPRequest_IPv4MappedIPv6Hex(t *testing.T) {
 	}
 }
 
+func TestValidateStaticIPRequest_GatewayEqualsIP_IPv4MappedIPv6(t *testing.T) {
+	req := StaticIPRequest{
+		IP:      "192.168.1.10/24",
+		Gateway: "::ffff:192.168.1.10",
+	}
+	err := validateStaticIPRequest(&req)
+	if !errors.Is(err, errGWEqualsIP) {
+		t.Fatalf("expected errGWEqualsIP for IPv4-mapped gateway==IP, got %v", err)
+	}
+}
+
 func TestGetInterface_ValidVLANAndAliasNames(t *testing.T) {
 	svc := NewService()
 	// VLAN and alias names should not be rejected by the regex

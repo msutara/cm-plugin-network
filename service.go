@@ -210,14 +210,14 @@ func validateStaticIPRequest(req *StaticIPRequest) error {
 	if gw4 == nil {
 		return errIPv6NotSupported
 	}
-	if !ipNet.Contains(gw) {
+	// Canonicalize early so subnet and equality checks use the same representation.
+	req.Gateway = gw4.String()
+	if !ipNet.Contains(gw4) {
 		return errGWNotInSubnet
 	}
-	if ip.Equal(gw) {
+	if ip.To4().Equal(gw4) {
 		return errGWEqualsIP
 	}
-	// Store canonicalized IPv4 to prevent IPv4-mapped IPv6 from reaching config files.
-	req.Gateway = gw4.String()
 	return nil
 }
 
