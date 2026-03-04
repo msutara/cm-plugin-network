@@ -88,8 +88,9 @@ type Service struct {
 	ifupPath string
 }
 
-// validIfaceName matches safe interface names (alphanumeric, hyphens, underscores).
-var validIfaceName = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+// validIfaceName matches safe interface names (alphanumeric, hyphens,
+// underscores, dots for VLANs, colons for aliases).
+var validIfaceName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:-]*$`)
 
 // validSearchDomain matches safe DNS search domain names.
 var validSearchDomain = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
@@ -153,6 +154,9 @@ func (s *Service) GetInterface(name string) (*Interface, error) {
 		return nil, errInvalidIfaceName
 	}
 
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	iface, err := net.InterfaceByName(name)
 	if err != nil {
 		return nil, errIfaceNotFound
@@ -183,7 +187,8 @@ func (s *Service) GetInterface(name string) (*Interface, error) {
 }
 
 // validateStaticIPRequest checks that the request fields are valid.
-func validateStaticIPRequest(req StaticIPRequest) error {
+// It canonicalizes the gateway to pure IPv4 form in place.
+func validateStaticIPRequest(req *StaticIPRequest) error {
 	if req.IP == "" {
 		return errEmptyIP
 	}
@@ -201,7 +206,8 @@ func validateStaticIPRequest(req StaticIPRequest) error {
 	if gw == nil {
 		return errInvalidGW
 	}
-	if gw.To4() == nil {
+	gw4 := gw.To4()
+	if gw4 == nil {
 		return errIPv6NotSupported
 	}
 	if !ipNet.Contains(gw) {
@@ -210,6 +216,8 @@ func validateStaticIPRequest(req StaticIPRequest) error {
 	if ip.Equal(gw) {
 		return errGWEqualsIP
 	}
+	// Store canonicalized IPv4 to prevent IPv4-mapped IPv6 from reaching config files.
+	req.Gateway = gw4.String()
 	return nil
 }
 
@@ -217,7 +225,7 @@ func validateStaticIPRequest(req StaticIPRequest) error {
 // On Linux, it atomically writes to /etc/network/interfaces.d/{name}
 // and restarts the interface with ifdown/ifup using a timeout.
 func (s *Service) SetStaticIP(name string, req StaticIPRequest) (*Interface, error) {
-	if err := validateStaticIPRequest(req); err != nil {
+	if err := validateStaticIPRequest(&req); err != nil {
 		return nil, err
 	}
 
@@ -253,14 +261,18 @@ func (s *Service) SetStaticIP(name string, req StaticIPRequest) (*Interface, err
 	}
 	slog.Info("wrote static IP config", "plugin", "network", "interface", name, "path", confPath)
 
-	// Restart the interface with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), s.cmdTimeout)
-	defer cancel()
+	// Separate timeouts for ifdown and ifup so a slow ifdown cannot steal ifup's budget.
+	ctxDown, cancelDown := context.WithTimeout(context.Background(), s.cmdTimeout)
+	defer cancelDown()
 
-	if out, err := exec.CommandContext(ctx, s.ifdownPath, name).CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(ctxDown, s.ifdownPath, name).CombinedOutput(); err != nil {
 		slog.Warn("ifdown failed (may be expected for first-time config)", "plugin", "network", "interface", name, "error", err, "output", string(out))
 	}
-	if out, err := exec.CommandContext(ctx, s.ifupPath, name).CombinedOutput(); err != nil {
+
+	ctxUp, cancelUp := context.WithTimeout(context.Background(), s.cmdTimeout)
+	defer cancelUp()
+
+	if out, err := exec.CommandContext(ctxUp, s.ifupPath, name).CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("ifup %s failed: %w: %s", name, err, string(out))
 	}
 
@@ -344,7 +356,7 @@ func (s *Service) SetDNS(cfg DNSConfig) (*DNSConfig, error) {
 		fmt.Fprintf(&b, "search %s\n", strings.Join(cfg.Search, " "))
 	}
 
-	if err := atomicWriteFile(s.resolvPath, []byte(b.String()), 0o644); err != nil {
+	if err := atomicWriteFile(resolveSymlink(s.resolvPath), []byte(b.String()), 0o644); err != nil {
 		return nil, fmt.Errorf("writing resolv.conf: %w", err)
 	}
 	slog.Info("wrote DNS config", "plugin", "network", "nameservers", cfg.Nameservers)
@@ -449,8 +461,38 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("renaming temp file: %w", err)
 	}
+
+	// Sync the parent directory to ensure the rename is durable on power loss.
+	if d, err := os.Open(filepath.Dir(path)); err == nil {
+		d.Sync() //nolint:errcheck // best-effort durability
+		d.Close()
+	}
+
 	success = true
 	return nil
+}
+
+// resolveSymlink follows a symlink to its real path so that atomicWriteFile
+// (which uses os.Rename) writes to the actual file rather than replacing the
+// symlink. Uses os.Lstat + os.Readlink to detect symlinks even when the
+// target does not yet exist. Falls back to the original path if not a symlink.
+func resolveSymlink(path string) string {
+	fi, err := os.Lstat(path)
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		return path
+	}
+	target, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		// Target may not exist; try one level of Readlink.
+		if t, err2 := os.Readlink(path); err2 == nil {
+			if filepath.IsAbs(t) {
+				return t
+			}
+			return filepath.Join(filepath.Dir(path), t)
+		}
+		return path
+	}
+	return target
 }
 
 // defaultGatewayLinux parses /proc/net/route for the default gateway.

@@ -58,7 +58,7 @@ func TestValidateStaticIPRequest(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateStaticIPRequest(tc.req)
+			err := validateStaticIPRequest(&tc.req)
 			if err != tc.wantErr {
 				t.Errorf("got %v, want %v", err, tc.wantErr)
 			}
@@ -247,7 +247,7 @@ func TestSetDNS_InvalidSearchDomain(t *testing.T) {
 }
 
 func TestValidateStaticIPRequest_IPv6Rejected(t *testing.T) {
-	err := validateStaticIPRequest(StaticIPRequest{IP: "fe80::1/64", Gateway: "192.168.1.1"})
+	err := validateStaticIPRequest(&StaticIPRequest{IP: "fe80::1/64", Gateway: "192.168.1.1"})
 	if err != errIPv6NotSupported {
 		t.Errorf("got %v, want errIPv6NotSupported", err)
 	}
@@ -262,7 +262,7 @@ func TestNetworkPlugin_ZeroValue_Routes(t *testing.T) {
 }
 
 func TestValidateStaticIPRequest_GWNotInSubnet(t *testing.T) {
-	err := validateStaticIPRequest(StaticIPRequest{
+	err := validateStaticIPRequest(&StaticIPRequest{
 		IP:      "192.168.1.10/24",
 		Gateway: "10.0.0.1",
 	})
@@ -272,7 +272,7 @@ func TestValidateStaticIPRequest_GWNotInSubnet(t *testing.T) {
 }
 
 func TestValidateStaticIPRequest_GWEqualsIP(t *testing.T) {
-	err := validateStaticIPRequest(StaticIPRequest{
+	err := validateStaticIPRequest(&StaticIPRequest{
 		IP:      "192.168.1.10/24",
 		Gateway: "192.168.1.10",
 	})
@@ -296,7 +296,7 @@ func TestValidateStaticIPRequest_SubnetBoundaries(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateStaticIPRequest(StaticIPRequest{IP: tc.ip, Gateway: tc.gw})
+			err := validateStaticIPRequest(&StaticIPRequest{IP: tc.ip, Gateway: tc.gw})
 			if !errors.Is(err, tc.wantErr) {
 				t.Errorf("got %v, want %v", err, tc.wantErr)
 			}
@@ -539,5 +539,189 @@ func TestSetStaticIP_SubnetMismatch(t *testing.T) {
 	})
 	if !errors.Is(err, errGWNotInSubnet) {
 		t.Errorf("got %v, want errGWNotInSubnet", err)
+	}
+}
+
+func TestValidateStaticIPRequest_IPv4MappedIPv6Canonicalized(t *testing.T) {
+	// IPv4-mapped IPv6 like ::ffff:192.168.1.1 passes To4() != nil but would
+	// write an invalid gateway string to the config file. The validator must
+	// canonicalize it to pure IPv4 form.
+	req := StaticIPRequest{
+		IP:      "192.168.1.10/24",
+		Gateway: "::ffff:192.168.1.1",
+	}
+	err := validateStaticIPRequest(&req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if req.Gateway != "192.168.1.1" {
+		t.Errorf("gateway not canonicalized: got %q, want %q", req.Gateway, "192.168.1.1")
+	}
+}
+
+func TestValidateStaticIPRequest_IPv4MappedIPv6Hex(t *testing.T) {
+	req := StaticIPRequest{
+		IP:      "192.168.1.10/24",
+		Gateway: "::ffff:c0a8:0101",
+	}
+	err := validateStaticIPRequest(&req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if req.Gateway != "192.168.1.1" {
+		t.Errorf("gateway not canonicalized: got %q, want %q", req.Gateway, "192.168.1.1")
+	}
+}
+
+func TestGetInterface_ValidVLANAndAliasNames(t *testing.T) {
+	svc := NewService()
+	// VLAN and alias names should not be rejected by the regex
+	names := []string{"eth0.100", "br0:1", "enp0s31f6.4094"}
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			_, err := svc.GetInterface(name)
+			if errors.Is(err, errInvalidIfaceName) {
+				t.Errorf("GetInterface(%q) rejected a valid VLAN/alias name", name)
+			}
+		})
+	}
+}
+
+func TestGetInterfaceUnlocked_NotFound(t *testing.T) {
+	svc := NewService()
+	_, err := svc.getInterfaceUnlocked("nonexistent_iface_99")
+	if !errors.Is(err, errIfaceNotFound) {
+		t.Errorf("got %v, want errIfaceNotFound", err)
+	}
+}
+
+func TestGetInterfaceUnlocked_MatchesGetInterface(t *testing.T) {
+	svc := NewService()
+	ifaces, err := svc.ListInterfaces()
+	if err != nil || len(ifaces) == 0 {
+		t.Skip("no interfaces available for comparison")
+	}
+	name := ifaces[0].Name
+
+	got, err := svc.getInterfaceUnlocked(name)
+	if err != nil {
+		t.Fatalf("getInterfaceUnlocked(%q): %v", name, err)
+	}
+
+	want, err := svc.GetInterface(name)
+	if err != nil {
+		t.Fatalf("GetInterface(%q): %v", name, err)
+	}
+
+	if got.Name != want.Name || got.MAC != want.MAC || got.State != want.State {
+		t.Errorf("mismatch: getInterfaceUnlocked=%+v, GetInterface=%+v", got, want)
+	}
+}
+
+func TestAtomicWriteFile_PermissionError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping permission test on Windows")
+	}
+	// Create a read-only directory
+	dir := t.TempDir()
+	roDir := filepath.Join(dir, "readonly")
+	if err := os.Mkdir(roDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(roDir, 0o700) })
+
+	err := atomicWriteFile(filepath.Join(roDir, "file"), []byte("data"), 0o644)
+	if err == nil {
+		t.Fatal("expected error for read-only directory")
+	}
+
+	// Ensure no temp files left behind
+	entries, _ := os.ReadDir(roDir)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".tmp-") {
+			t.Errorf("temp file left behind: %s", e.Name())
+		}
+	}
+}
+
+func TestResolveSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping symlink test on Windows")
+	}
+	dir := t.TempDir()
+	realFile := filepath.Join(dir, "real.conf")
+	if err := os.WriteFile(realFile, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.conf")
+	if err := os.Symlink(realFile, link); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved := resolveSymlink(link)
+	if resolved != realFile {
+		t.Errorf("resolveSymlink: got %q, want %q", resolved, realFile)
+	}
+
+	// Non-symlink returns self
+	direct := resolveSymlink(realFile)
+	if direct != realFile {
+		t.Errorf("resolveSymlink on regular file: got %q, want %q", direct, realFile)
+	}
+
+	// Nonexistent returns original path
+	missing := resolveSymlink("/nonexistent/path")
+	if missing != "/nonexistent/path" {
+		t.Errorf("resolveSymlink on missing: got %q", missing)
+	}
+
+	// Symlink to nonexistent target — should follow via Readlink, not fall back
+	danglingTarget := filepath.Join(dir, "does-not-exist.conf")
+	danglingLink := filepath.Join(dir, "dangling.conf")
+	if err := os.Symlink(danglingTarget, danglingLink); err != nil {
+		t.Fatal(err)
+	}
+	resolved = resolveSymlink(danglingLink)
+	if resolved != danglingTarget {
+		t.Errorf("resolveSymlink on dangling symlink: got %q, want %q", resolved, danglingTarget)
+	}
+}
+
+func TestSetDNS_ThroughSymlink(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("skipping Linux-only test")
+	}
+	dir := t.TempDir()
+	realFile := filepath.Join(dir, "real-resolv.conf")
+	if err := os.WriteFile(realFile, []byte("# old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "resolv.conf")
+	if err := os.Symlink(realFile, link); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := &Service{resolvPath: link}
+	_, err := svc.SetDNS(DNSConfig{Nameservers: []string{"1.1.1.1"}})
+	if err != nil {
+		t.Fatalf("SetDNS through symlink: %v", err)
+	}
+
+	// Verify content was written to the real file
+	got, err := os.ReadFile(realFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "nameserver 1.1.1.1") {
+		t.Errorf("real file missing expected content: %q", got)
+	}
+
+	// Verify symlink still exists and points to real file
+	target, err := os.Readlink(link)
+	if err != nil {
+		t.Fatalf("symlink broken after SetDNS: %v", err)
+	}
+	if target != realFile {
+		t.Errorf("symlink target changed: got %q, want %q", target, realFile)
 	}
 }

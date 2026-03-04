@@ -65,14 +65,31 @@ All routes are relative to the plugin mount point
 
 ## 6. Security
 
-- **IPv4-only** — all IP inputs are validated as IPv4 addresses.
+- **IPv4-only static IP** — all static IP and gateway inputs are validated
+  as IPv4 addresses. IPv4-mapped IPv6 forms (e.g., `::ffff:192.168.1.1`)
+  are canonicalized to pure IPv4 before use. DNS nameservers accept both
+  IPv4 and IPv6.
 - **CIDR validation** — static IP values must include a valid CIDR suffix.
-- **Path traversal defense** — interface names are validated via regex to
-  prevent directory traversal in system calls.
+- **Subnet validation** — the gateway must reside within the IP address
+  subnet, and cannot equal the interface IP.
+- **Path traversal defense** — interface names are validated via regex
+  (`^[a-zA-Z0-9][a-zA-Z0-9._:-]*$`) at both the HTTP and service layers.
+  VLAN names (`eth0.100`) and aliases (`br0:1`) are accepted.
 - **DNS injection prevention** — nameserver and search domain values are
   validated before being written to system configuration.
+- **Atomic file writes** — configuration files are written via temp-file +
+  fsync + rename to prevent corruption from interrupted writes or power
+  loss. The parent directory is synced for durability on embedded flash.
+- **Symlink-safe DNS writes** — if `/etc/resolv.conf` is a symlink (e.g.,
+  to systemd-resolved), the write targets the resolved path to preserve
+  the link.
+- **Command execution** — `ifdown`/`ifup` are invoked via absolute paths
+  with separate per-command timeouts (default 30 s each) and no shell
+  interpretation.
 - **MaxBytesReader** — PUT request bodies are size-limited to prevent
   abuse.
+- **Concurrency** — all mutating operations are serialized via a mutex to
+  prevent interleaved config writes on the same interface.
 
 ---
 

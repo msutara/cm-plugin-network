@@ -13,8 +13,9 @@ import (
 // maxBodySize limits JSON request bodies to 1 MB.
 const maxBodySize = 1 << 20
 
-// validName matches safe interface names (alphanumeric, hyphens, underscores).
-var validName = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+// validName matches safe interface names (alphanumeric, hyphens,
+// underscores, dots for VLANs, colons for aliases).
+var validName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:-]*$`)
 
 func newRouter(svc *Service) http.Handler {
 	r := chi.NewRouter()

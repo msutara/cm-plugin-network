@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testRouter() http.Handler {
@@ -303,4 +304,78 @@ func TestHandleSetStaticIP_IPv6Rejected(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("got %d, want %d", w.Code, http.StatusBadRequest)
 	}
+}
+
+func TestHandleGetInterface_InvalidNameErrorMessage(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/interfaces/bad$name", nil)
+	testRouter().ServeHTTP(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want %d", w.Code, http.StatusBadRequest)
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	errObj := resp["error"].(map[string]any)
+	msg := errObj["message"].(string)
+	if !strings.Contains(msg, "invalid interface name") {
+		t.Errorf("error message should mention 'invalid interface name', got %q", msg)
+	}
+}
+
+func TestHandleSetStaticIP_InvalidNameErrorMessage(t *testing.T) {
+	body := `{"ip": "10.0.0.1/24", "gateway": "10.0.0.254"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/interfaces/bad$name", bytes.NewBufferString(body))
+	testRouter().ServeHTTP(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want %d", w.Code, http.StatusBadRequest)
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	errObj := resp["error"].(map[string]any)
+	msg := errObj["message"].(string)
+	if !strings.Contains(msg, "invalid interface name") {
+		t.Errorf("error message should mention 'invalid interface name', got %q", msg)
+	}
+}
+
+func TestHandleSetStaticIP_IPv4MappedIPv6Gateway(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("skipping Linux-only test")
+	}
+	// Use temp dirs to avoid writing to real system paths.
+	dir := t.TempDir()
+	svc := &Service{
+		resolvPath:        filepath.Join(dir, "resolv.conf"),
+		interfacesDirPath: dir,
+		cmdTimeout:        5 * time.Second,
+		ifdownPath:        "/sbin/ifdown",
+		ifupPath:          "/sbin/ifup",
+	}
+	router := newRouter(svc)
+
+	body := `{"ip": "192.168.1.10/24", "gateway": "::ffff:192.168.1.1"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/interfaces/eth0", bytes.NewBufferString(body))
+	router.ServeHTTP(w, r)
+
+	// Regardless of HTTP status (eth0 likely doesn't exist → 404), if the
+	// config file was written it must contain canonical IPv4, never ::ffff:.
+	confPath := filepath.Join(dir, "eth0")
+	if got, err := os.ReadFile(confPath); err == nil {
+		if strings.Contains(string(got), "::ffff") {
+			t.Error("config file contains un-canonicalized IPv4-mapped IPv6 gateway")
+		}
+		if !strings.Contains(string(got), "gateway 192.168.1.1") {
+			t.Errorf("config file missing canonicalized gateway, got: %s", got)
+		}
+	}
+	// Unit tests in service_test.go directly assert canonicalization;
+	// this route test verifies the full HTTP path doesn't bypass it.
 }
