@@ -17,6 +17,33 @@ func testRouter() http.Handler {
 	return newRouter(NewService())
 }
 
+// extractErrorMessage extracts the error message string from a JSON error
+// response body. Fails the test with a clear message if the shape is unexpected.
+func extractErrorMessage(t *testing.T, body []byte) string {
+	t.Helper()
+	var resp map[string]any
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatalf("invalid JSON response: %v", err)
+	}
+	rawErr, ok := resp["error"]
+	if !ok {
+		t.Fatal("missing 'error' field in response")
+	}
+	errObj, ok := rawErr.(map[string]any)
+	if !ok {
+		t.Fatalf("'error' field has wrong type: %T", rawErr)
+	}
+	rawMsg, ok := errObj["message"]
+	if !ok {
+		t.Fatal("missing 'message' field in error object")
+	}
+	msg, ok := rawMsg.(string)
+	if !ok {
+		t.Fatalf("'message' field has wrong type: %T", rawMsg)
+	}
+	return msg
+}
+
 func testRouterWithResolvPath(t *testing.T) http.Handler {
 	t.Helper()
 	tmp := t.TempDir()
@@ -60,12 +87,7 @@ func TestHandleGetInterface_InvalidName(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("got %d, want %d", w.Code, http.StatusBadRequest)
 	}
-	var resp map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-	errObj := resp["error"].(map[string]any)
-	msg := errObj["message"].(string)
+	msg := extractErrorMessage(t, w.Body.Bytes())
 	if !strings.Contains(msg, "invalid interface name") {
 		t.Errorf("error message should mention 'invalid interface name', got %q", msg)
 	}
@@ -80,12 +102,7 @@ func TestHandleSetStaticIP_InvalidName(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("got %d, want %d", w.Code, http.StatusBadRequest)
 	}
-	var resp map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-	errObj := resp["error"].(map[string]any)
-	msg := errObj["message"].(string)
+	msg := extractErrorMessage(t, w.Body.Bytes())
 	if !strings.Contains(msg, "invalid interface name") {
 		t.Errorf("error message should mention 'invalid interface name', got %q", msg)
 	}
@@ -213,12 +230,7 @@ func TestHandleSetStaticIP_GWNotInSubnet(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("got %d, want %d", w.Code, http.StatusBadRequest)
 	}
-	var resp map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-	errObj := resp["error"].(map[string]any)
-	msg := errObj["message"].(string)
+	msg := extractErrorMessage(t, w.Body.Bytes())
 	if !strings.Contains(msg, "subnet") {
 		t.Errorf("error message should mention subnet, got %q", msg)
 	}
