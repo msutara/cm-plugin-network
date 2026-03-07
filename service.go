@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -74,6 +75,8 @@ var (
 	errGWNotInSubnet     = errors.New("gateway is not within the IP address subnet")
 	errGWEqualsIP        = errors.New("gateway cannot be the same as the interface IP")
 	errInvalidIfaceName  = errors.New("invalid interface name")
+	errNoStaticConfig    = errors.New("no static configuration exists for this interface")
+	errNoBackup          = errors.New("no backup configuration available to rollback")
 )
 
 // Service contains the domain logic for network management.
@@ -297,7 +300,7 @@ func (s *Service) SetStaticIP(name string, req StaticIPRequest) (*Interface, err
 			if restErr := restoreConfigFile(backupPath, confPath); restErr != nil {
 				slog.Error("rollback failed; backup preserved for manual recovery",
 					"plugin", "network", "interface", name, "backup", backupPath)
-				return nil, fmt.Errorf("%w; rollback also failed: %v; backup kept at %s", ifupErr, restErr, backupPath)
+				return nil, fmt.Errorf("%w; rollback also failed: %v; backup preserved for manual recovery", ifupErr, restErr)
 			}
 			slog.Info("restored config backup after ifup failure", "plugin", "network", "interface", name)
 
@@ -307,7 +310,7 @@ func (s *Service) SetStaticIP(name string, req StaticIPRequest) (*Interface, err
 			if out2, err2 := exec.CommandContext(ctxReUp, s.ifupPath, name).CombinedOutput(); err2 != nil {
 				slog.Error("rollback ifup also failed; backup preserved for manual recovery",
 					"plugin", "network", "interface", name, "backup", backupPath)
-				return nil, fmt.Errorf("%w; rollback ifup also failed: %v: %s; backup kept at %s", ifupErr, err2, string(out2), backupPath)
+				return nil, fmt.Errorf("%w; rollback ifup also failed: %v: %s; backup preserved for manual recovery", ifupErr, err2, string(out2))
 			}
 			// Rollback succeeded — safe to remove backup.
 			_ = os.Remove(backupPath)
@@ -316,12 +319,227 @@ func (s *Service) SetStaticIP(name string, req StaticIPRequest) (*Interface, err
 		return nil, ifupErr
 	}
 
-	// Success — clean up backup.
-	if backupPath != "" {
-		_ = os.Remove(backupPath)
+	// Success — .bak preserved for rollback via POST /interfaces/{name}/rollback.
+
+	return s.getInterfaceUnlocked(name)
+}
+
+// DeleteStaticIP removes the static IP configuration for an interface,
+// reverting it to DHCP. The existing config is backed up before removal.
+func (s *Service) DeleteStaticIP(name string) (*Interface, error) {
+	if runtime.GOOS != "linux" {
+		return nil, errNotLinux
+	}
+	if !validIfaceName.MatchString(name) {
+		return nil, errInvalidIfaceName
+	}
+	if _, err := net.InterfaceByName(name); err != nil {
+		return nil, errIfaceNotFound
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	confPath := filepath.Join(s.interfacesDirPath, name)
+	if _, err := os.Stat(confPath); os.IsNotExist(err) {
+		return nil, errNoStaticConfig
+	}
+
+	backupPath, err := backupConfigFile(confPath)
+	if err != nil {
+		return nil, fmt.Errorf("backing up interface config: %w", err)
+	}
+
+	if err := os.Remove(confPath); err != nil {
+		if backupPath != "" {
+			_ = os.Remove(backupPath)
+		}
+		return nil, fmt.Errorf("removing interface config: %w", err)
+	}
+	slog.Info("deleted static IP config", "plugin", "network", "interface", name)
+
+	ctxDown, cancelDown := context.WithTimeout(context.Background(), s.cmdTimeout)
+	defer cancelDown()
+
+	if out, err := exec.CommandContext(ctxDown, s.ifdownPath, name).CombinedOutput(); err != nil {
+		slog.Warn("ifdown failed during delete", "plugin", "network",
+			"interface", name, "error", err, "output", string(out))
+	}
+
+	ctxUp, cancelUp := context.WithTimeout(context.Background(), s.cmdTimeout)
+	defer cancelUp()
+
+	// ifup may fail if the interface has no fallback config (e.g. no DHCP
+	// entry in /etc/network/interfaces). This is expected after deleting
+	// the only config snippet — the interface stays down until manually
+	// configured or rolled back via POST /interfaces/{name}/rollback.
+	if out, err := exec.CommandContext(ctxUp, s.ifupPath, name).CombinedOutput(); err != nil {
+		slog.Warn("ifup failed after config removal (interface may lack fallback config)",
+			"plugin", "network", "interface", name, "error", err, "output", string(out))
+	}
+
+	// .bak preserved for rollback via POST /interfaces/{name}/rollback.
+
+	return s.getInterfaceUnlocked(name)
+}
+
+// DryRunDeleteStaticIP previews what would change if the static config were removed.
+func (s *Service) DryRunDeleteStaticIP(name string) (*DryRunResult, error) {
+	if !validIfaceName.MatchString(name) {
+		return nil, errInvalidIfaceName
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	confPath := filepath.Join(s.interfacesDirPath, name)
+	data, err := os.ReadFile(confPath)
+	if os.IsNotExist(err) {
+		return nil, errNoStaticConfig
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read current config: %w", err)
+	}
+
+	return &DryRunResult{
+		Valid:    true,
+		Current:  string(data),
+		Proposed: "",
+		Changes:  []string{"static configuration will be removed; interface will revert to DHCP"},
+	}, nil
+}
+
+// RollbackInterface restores the interface config from the current .bak snapshot.
+// The .bak file represents the state prior to the last mutating operation
+// (PUT, DELETE, or a previous rollback). On successful rollback the
+// pre-rollback snapshot is promoted to .bak so the rollback itself can
+// be reversed.
+func (s *Service) RollbackInterface(name string) (*Interface, error) {
+	if runtime.GOOS != "linux" {
+		return nil, errNotLinux
+	}
+	if !validIfaceName.MatchString(name) {
+		return nil, errInvalidIfaceName
+	}
+	if _, err := net.InterfaceByName(name); err != nil {
+		return nil, errIfaceNotFound
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	confPath := filepath.Join(s.interfacesDirPath, name)
+	backupPath := confPath + ".bak"
+
+	if _, err := os.Stat(backupPath); os.IsNotExist(err) {
+		return nil, errNoBackup
+	}
+
+	// Backup current config to a DIFFERENT path so we don't overwrite the
+	// .bak we're about to restore from.
+	preRollbackPath, err := backupConfigFileAs(confPath, ".pre-rollback")
+	if err != nil {
+		return nil, fmt.Errorf("backing up current config before rollback: %w", err)
+	}
+
+	if err := restoreConfigFile(backupPath, confPath); err != nil {
+		if preRollbackPath != "" {
+			_ = os.Remove(preRollbackPath)
+		}
+		return nil, fmt.Errorf("restoring backup config: %w", err)
+	}
+
+	ctxDown, cancelDown := context.WithTimeout(context.Background(), s.cmdTimeout)
+	defer cancelDown()
+
+	if out, err := exec.CommandContext(ctxDown, s.ifdownPath, name).CombinedOutput(); err != nil {
+		slog.Warn("ifdown failed during rollback", "plugin", "network",
+			"interface", name, "error", err, "output", string(out))
+	}
+
+	ctxUp, cancelUp := context.WithTimeout(context.Background(), s.cmdTimeout)
+	defer cancelUp()
+
+	if out, err := exec.CommandContext(ctxUp, s.ifupPath, name).CombinedOutput(); err != nil {
+		ifupErr := fmt.Errorf("ifup %s failed after rollback: %w: %s", name, err, string(out))
+
+		// Restore pre-rollback state.
+		if preRollbackPath != "" {
+			if restErr := restoreConfigFile(preRollbackPath, confPath); restErr != nil {
+				slog.Error("rollback reversal failed; backup preserved",
+					"plugin", "network", "interface", name, "backup", preRollbackPath)
+				return nil, fmt.Errorf("%w; reversal also failed: %v; backup preserved for manual recovery",
+					ifupErr, restErr)
+			}
+
+			ctxReUp, cancelReUp := context.WithTimeout(context.Background(), s.cmdTimeout)
+			defer cancelReUp()
+
+			if out2, err2 := exec.CommandContext(ctxReUp, s.ifupPath, name).CombinedOutput(); err2 != nil {
+				slog.Error("rollback reversal ifup failed",
+					"plugin", "network", "interface", name, "backup", preRollbackPath)
+				return nil, fmt.Errorf("%w; reversal ifup also failed: %v: %s; backup preserved for manual recovery",
+					ifupErr, err2, string(out2))
+			}
+			_ = os.Remove(preRollbackPath)
+		} else {
+			// No prior config existed (e.g. post-delete rollback).
+			// Remove the restored file to return to "no config" state.
+			_ = os.Remove(confPath)
+			// Rename .bak to mark it as failed so retries don't loop.
+			failedPath := backupPath + ".failed"
+			if renameErr := os.Rename(backupPath, failedPath); renameErr != nil {
+				slog.Warn("could not rename backup to .failed",
+					"plugin", "network", "interface", name, "error", renameErr)
+			}
+			slog.Warn("rollback ifup failed; reverted to no-config state; backup marked as failed",
+				"plugin", "network", "interface", name, "failedBackup", failedPath)
+		}
+		return nil, ifupErr
+	}
+
+	// Success — promote .pre-rollback → .bak so the rollback itself is reversible.
+	if preRollbackPath != "" {
+		if err := os.Rename(preRollbackPath, backupPath); err != nil {
+			slog.Warn("could not promote pre-rollback to backup",
+				"plugin", "network", "interface", name)
+		}
 	}
 
 	return s.getInterfaceUnlocked(name)
+}
+
+// DryRunRollbackInterface previews what would change if the .bak config were restored.
+func (s *Service) DryRunRollbackInterface(name string) (*DryRunResult, error) {
+	if !validIfaceName.MatchString(name) {
+		return nil, errInvalidIfaceName
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	confPath := filepath.Join(s.interfacesDirPath, name)
+	backupPath := confPath + ".bak"
+
+	backupData, err := safeReadFile(backupPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, errNoBackup
+		}
+		return nil, fmt.Errorf("read backup config: %w", err)
+	}
+
+	var current string
+	if data, err := os.ReadFile(confPath); err == nil {
+		current = string(data)
+	}
+
+	return &DryRunResult{
+		Valid:    true,
+		Current:  current,
+		Proposed: string(backupData),
+		Changes:  diffConfigs(current, string(backupData)),
+	}, nil
 }
 
 // GetDNS returns the current DNS configuration by parsing resolv.conf.
@@ -423,7 +641,7 @@ func (s *Service) SetDNS(cfg DNSConfig) (*DNSConfig, error) {
 			if restErr := restoreConfigFile(backupPath, targetPath); restErr != nil {
 				slog.Error("DNS rollback failed; backup preserved for manual recovery",
 					"plugin", "network", "backup", backupPath)
-				return nil, fmt.Errorf("verifying DNS config: %w; rollback also failed: %v; backup kept at %s", err, restErr, backupPath)
+				return nil, fmt.Errorf("verifying DNS config: %w; rollback also failed: %v; backup preserved for manual recovery", err, restErr)
 			}
 			slog.Info("restored DNS config backup after verification failure", "plugin", "network")
 			// Rollback succeeded — safe to remove backup.
@@ -432,10 +650,7 @@ func (s *Service) SetDNS(cfg DNSConfig) (*DNSConfig, error) {
 		return nil, fmt.Errorf("verifying DNS config: %w", err)
 	}
 
-	// Success — clean up backup.
-	if backupPath != "" {
-		_ = os.Remove(backupPath)
-	}
+	// Success — .bak preserved for rollback via POST /dns/rollback.
 
 	return result, nil
 }
@@ -546,6 +761,97 @@ func (s *Service) DryRunDNS(req DNSConfig) (*DryRunResult, error) {
 		Current:  current,
 		Proposed: proposed,
 		Changes:  diffConfigs(current, proposed),
+	}, nil
+}
+
+// RollbackDNS restores the resolv.conf from the current .bak snapshot.
+// The .bak file always represents the state prior to the last mutating
+// operation (either a PUT or a previous rollback), and on successful
+// rollback the pre-rollback snapshot is promoted to .bak so the rollback
+// itself can be reversed.
+func (s *Service) RollbackDNS() (*DNSConfig, error) {
+	if runtime.GOOS != "linux" {
+		return nil, errNotLinux
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	targetPath := resolveSymlink(s.resolvPath)
+	backupPath := targetPath + ".bak"
+
+	if _, err := os.Stat(backupPath); os.IsNotExist(err) {
+		return nil, errNoBackup
+	}
+
+	// Backup current config to a DIFFERENT path so we don't overwrite the
+	// .bak we're about to restore from.
+	preRollbackPath, err := backupConfigFileAs(targetPath, ".pre-rollback")
+	if err != nil {
+		return nil, fmt.Errorf("backing up current DNS config before rollback: %w", err)
+	}
+
+	if err := restoreConfigFile(backupPath, targetPath); err != nil {
+		if preRollbackPath != "" {
+			_ = os.Remove(preRollbackPath)
+		}
+		return nil, fmt.Errorf("restoring DNS backup: %w", err)
+	}
+
+	// Verify the restored config is parseable.
+	result, err := parseResolvConf(s.resolvPath)
+	if err != nil {
+		// Restored file is corrupt — revert to pre-rollback state.
+		if preRollbackPath != "" {
+			if restErr := restoreConfigFile(preRollbackPath, targetPath); restErr != nil {
+				slog.Error("DNS rollback reversal failed; backup preserved",
+					"plugin", "network", "backup", preRollbackPath)
+				return nil, fmt.Errorf("verifying rolled-back DNS: %w; reversal also failed: %v; backup preserved for manual recovery",
+					err, restErr)
+			}
+			_ = os.Remove(preRollbackPath)
+		}
+		return nil, fmt.Errorf("verifying rolled-back DNS config: %w", err)
+	}
+
+	// Success — promote .pre-rollback → .bak so the rollback itself is reversible.
+	if preRollbackPath != "" {
+		if err := os.Rename(preRollbackPath, backupPath); err != nil {
+			slog.Warn("could not promote pre-rollback to backup",
+				"plugin", "network")
+		}
+	}
+
+	slog.Info("rolled back DNS config", "plugin", "network")
+	return result, nil
+}
+
+// DryRunRollbackDNS previews what would change if the .bak resolv.conf were restored.
+func (s *Service) DryRunRollbackDNS() (*DryRunResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	targetPath := resolveSymlink(s.resolvPath)
+	backupPath := targetPath + ".bak"
+
+	backupData, err := safeReadFile(backupPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, errNoBackup
+		}
+		return nil, fmt.Errorf("read DNS backup: %w", err)
+	}
+
+	var current string
+	if data, err := os.ReadFile(targetPath); err == nil {
+		current = string(data)
+	}
+
+	return &DryRunResult{
+		Valid:    true,
+		Current:  current,
+		Proposed: string(backupData),
+		Changes:  diffConfigs(current, string(backupData)),
 	}, nil
 }
 
@@ -697,7 +1003,14 @@ func resolveSymlink(path string) string {
 // should recover from a previous .bak before triggering a new operation.
 // Timestamped backups or overwrite-refusal may be added in a future PR.
 func backupConfigFile(configPath string) (string, error) {
-	backupPath := configPath + ".bak"
+	return backupConfigFileAs(configPath, ".bak")
+}
+
+// backupConfigFileAs copies the current config to configPath+suffix.
+// Used by rollback operations to save a pre-rollback snapshot to a distinct
+// path (e.g. ".pre-rollback") so it does not overwrite the .bak being restored.
+func backupConfigFileAs(configPath, suffix string) (string, error) {
+	backupPath := configPath + suffix
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -711,11 +1024,38 @@ func backupConfigFile(configPath string) (string, error) {
 	return backupPath, nil
 }
 
+// safeReadFile opens path, verifies the file descriptor refers to a regular
+// file (not a symlink or device), and reads its contents — all through the
+// same fd to eliminate TOCTOU races between check and read.
+// safeReadFile opens path and reads it through a single file descriptor,
+// eliminating TOCTOU races between stat and read for regular files.
+// It rejects non-regular targets (directories, devices, FIFOs) after
+// resolving any symlinks, but it does not attempt to defend against
+// symlink substitution; callers must ensure that path is trusted if
+// protection against symlink traversal is required.
+func safeReadFile(path string) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("not a regular file: %s", filepath.Base(path))
+	}
+
+	return io.ReadAll(f)
+}
+
 // restoreConfigFile restores a backup to the original config path.
 // The caller is responsible for removing the backup file after
 // confirming the restore was successful (e.g. ifup succeeded).
 func restoreConfigFile(backupPath, configPath string) error {
-	data, err := os.ReadFile(backupPath)
+	data, err := safeReadFile(backupPath)
 	if err != nil {
 		return fmt.Errorf("restore read: %w", err)
 	}

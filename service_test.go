@@ -1091,3 +1091,322 @@ func TestDryRunDNS_InvalidSearchDomain(t *testing.T) {
 		t.Errorf("got %v, want errInvalidSearchDom", err)
 	}
 }
+
+// --- DeleteStaticIP tests ---
+
+func TestDeleteStaticIP_NonLinux(t *testing.T) {
+	if runtime.GOOS == "linux" {
+		t.Skip("skipping non-Linux test")
+	}
+	svc := NewService()
+	_, err := svc.DeleteStaticIP("eth0")
+	if !errors.Is(err, errNotLinux) {
+		t.Errorf("got %v, want errNotLinux", err)
+	}
+}
+
+func TestDeleteStaticIP_InvalidNameAtServiceLayer(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("skipping Linux-only test")
+	}
+	svc := NewService()
+	_, err := svc.DeleteStaticIP("../../etc")
+	if !errors.Is(err, errInvalidIfaceName) {
+		t.Errorf("got %v, want errInvalidIfaceName", err)
+	}
+}
+
+func TestDryRunDeleteStaticIP_NoConfig(t *testing.T) {
+	dir := t.TempDir()
+	svc := &Service{interfacesDirPath: dir}
+	_, err := svc.DryRunDeleteStaticIP("eth0")
+	if !errors.Is(err, errNoStaticConfig) {
+		t.Errorf("got %v, want errNoStaticConfig", err)
+	}
+}
+
+func TestDryRunDeleteStaticIP_Valid(t *testing.T) {
+	dir := t.TempDir()
+	confContent := "auto eth0\niface eth0 inet static\n    address 10.0.0.1/24\n    gateway 10.0.0.254\n"
+	if err := os.WriteFile(filepath.Join(dir, "eth0"), []byte(confContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	svc := &Service{interfacesDirPath: dir}
+
+	result, err := svc.DryRunDeleteStaticIP("eth0")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Valid {
+		t.Error("expected Valid=true")
+	}
+	if result.Current != confContent {
+		t.Errorf("Current: got %q, want %q", result.Current, confContent)
+	}
+	if result.Proposed != "" {
+		t.Errorf("Proposed should be empty, got %q", result.Proposed)
+	}
+	if len(result.Changes) == 0 {
+		t.Error("expected non-empty Changes")
+	}
+}
+
+func TestDryRunDeleteStaticIP_InvalidName(t *testing.T) {
+	svc := NewService()
+	_, err := svc.DryRunDeleteStaticIP("../../etc")
+	if !errors.Is(err, errInvalidIfaceName) {
+		t.Errorf("got %v, want errInvalidIfaceName", err)
+	}
+}
+
+// --- RollbackInterface tests ---
+
+func TestRollbackInterface_NonLinux(t *testing.T) {
+	if runtime.GOOS == "linux" {
+		t.Skip("skipping non-Linux test")
+	}
+	svc := NewService()
+	_, err := svc.RollbackInterface("eth0")
+	if !errors.Is(err, errNotLinux) {
+		t.Errorf("got %v, want errNotLinux", err)
+	}
+}
+
+func TestRollbackInterface_InvalidNameAtServiceLayer(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("skipping Linux-only test")
+	}
+	svc := NewService()
+	_, err := svc.RollbackInterface("../../etc")
+	if !errors.Is(err, errInvalidIfaceName) {
+		t.Errorf("got %v, want errInvalidIfaceName", err)
+	}
+}
+
+func TestDryRunRollbackInterface_NoBackup(t *testing.T) {
+	dir := t.TempDir()
+	svc := &Service{interfacesDirPath: dir}
+	_, err := svc.DryRunRollbackInterface("eth0")
+	if !errors.Is(err, errNoBackup) {
+		t.Errorf("got %v, want errNoBackup", err)
+	}
+}
+
+func TestDryRunRollbackInterface_Valid(t *testing.T) {
+	dir := t.TempDir()
+	current := "auto eth0\niface eth0 inet static\n    address 192.168.1.10/24\n    gateway 192.168.1.1\n"
+	backup := "auto eth0\niface eth0 inet static\n    address 10.0.0.1/24\n    gateway 10.0.0.254\n"
+	if err := os.WriteFile(filepath.Join(dir, "eth0"), []byte(current), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "eth0.bak"), []byte(backup), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	svc := &Service{interfacesDirPath: dir}
+
+	result, err := svc.DryRunRollbackInterface("eth0")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Valid {
+		t.Error("expected Valid=true")
+	}
+	if result.Current != current {
+		t.Errorf("Current: got %q, want %q", result.Current, current)
+	}
+	if result.Proposed != backup {
+		t.Errorf("Proposed: got %q, want %q", result.Proposed, backup)
+	}
+	if len(result.Changes) == 0 {
+		t.Error("expected non-empty Changes")
+	}
+}
+
+func TestDryRunRollbackInterface_InvalidName(t *testing.T) {
+	svc := NewService()
+	_, err := svc.DryRunRollbackInterface("../../etc")
+	if !errors.Is(err, errInvalidIfaceName) {
+		t.Errorf("got %v, want errInvalidIfaceName", err)
+	}
+}
+
+// --- RollbackDNS tests ---
+
+func TestRollbackDNS_NonLinux(t *testing.T) {
+	if runtime.GOOS == "linux" {
+		t.Skip("skipping non-Linux test")
+	}
+	svc := NewService()
+	_, err := svc.RollbackDNS()
+	if !errors.Is(err, errNotLinux) {
+		t.Errorf("got %v, want errNotLinux", err)
+	}
+}
+
+func TestDryRunRollbackDNS_NoBackup(t *testing.T) {
+	dir := t.TempDir()
+	svc := &Service{resolvPath: filepath.Join(dir, "resolv.conf")}
+	_, err := svc.DryRunRollbackDNS()
+	if !errors.Is(err, errNoBackup) {
+		t.Errorf("got %v, want errNoBackup", err)
+	}
+}
+
+func TestDryRunRollbackDNS_Valid(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+	bakPath := resolvPath + ".bak"
+
+	current := "nameserver 8.8.8.8\nsearch example.com\n"
+	backup := "nameserver 1.1.1.1\nsearch old.example.com\n"
+	if err := os.WriteFile(resolvPath, []byte(current), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bakPath, []byte(backup), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	svc := &Service{resolvPath: resolvPath}
+
+	result, err := svc.DryRunRollbackDNS()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Valid {
+		t.Error("expected Valid=true")
+	}
+	if result.Current != current {
+		t.Errorf("Current: got %q, want %q", result.Current, current)
+	}
+	if result.Proposed != backup {
+		t.Errorf("Proposed: got %q, want %q", result.Proposed, backup)
+	}
+	if len(result.Changes) == 0 {
+		t.Error("expected non-empty Changes")
+	}
+}
+
+// --- safeReadFile tests ---
+
+func TestSafeReadFile_Regular(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.bak")
+	content := "auto eth0\niface eth0 inet static\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := safeReadFile(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(data) != content {
+		t.Errorf("got %q, want %q", data, content)
+	}
+}
+
+func TestSafeReadFile_NotExist(t *testing.T) {
+	_, err := safeReadFile(filepath.Join(t.TempDir(), "nope"))
+	if !os.IsNotExist(err) {
+		t.Fatalf("expected os.IsNotExist, got: %v", err)
+	}
+}
+
+func TestSafeReadFile_Directory(t *testing.T) {
+	dir := t.TempDir()
+	_, err := safeReadFile(dir)
+	if err == nil {
+		t.Fatal("expected error for directory, got nil")
+	}
+	if !strings.Contains(err.Error(), "not a regular file") {
+		t.Errorf("expected 'not a regular file' error, got: %v", err)
+	}
+}
+
+func TestSafeReadFile_Symlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping symlink test on Windows")
+	}
+	dir := t.TempDir()
+	realFile := filepath.Join(dir, "real.bak")
+	if err := os.WriteFile(realFile, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.bak")
+	if err := os.Symlink(realFile, link); err != nil {
+		t.Fatal(err)
+	}
+
+	// os.OpenFile follows symlinks; f.Stat() sees the resolved regular file.
+	// safeReadFile defends against non-regular files, not symlinks themselves.
+	data, err := safeReadFile(link)
+	if err != nil {
+		t.Fatalf("unexpected error reading through symlink: %v", err)
+	}
+	if string(data) != "secret" {
+		t.Errorf("expected 'secret', got %q", data)
+	}
+}
+
+func TestSafeReadFile_EmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "empty.bak")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := safeReadFile(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(data) != 0 {
+		t.Errorf("expected empty data, got %d bytes", len(data))
+	}
+}
+
+// --- restoreConfigFile tests ---
+
+func TestRestoreConfigFile_RegularBackup(t *testing.T) {
+	dir := t.TempDir()
+	backup := filepath.Join(dir, "iface.bak")
+	target := filepath.Join(dir, "iface")
+
+	if err := os.WriteFile(backup, []byte("restored content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := restoreConfigFile(backup, target); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "restored content" {
+		t.Errorf("got %q, want %q", got, "restored content")
+	}
+}
+
+func TestRestoreConfigFile_BackupNotExist(t *testing.T) {
+	dir := t.TempDir()
+	err := restoreConfigFile(filepath.Join(dir, "nope.bak"), filepath.Join(dir, "target"))
+	if err == nil {
+		t.Fatal("expected error for missing backup")
+	}
+}
+
+func TestRestoreConfigFile_BackupIsDirectory(t *testing.T) {
+	dir := t.TempDir()
+	backupDir := filepath.Join(dir, "fake.bak")
+	if err := os.Mkdir(backupDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := restoreConfigFile(backupDir, filepath.Join(dir, "target"))
+	if err == nil {
+		t.Fatal("expected error for directory backup")
+	}
+	if !strings.Contains(err.Error(), "not a regular file") {
+		t.Errorf("expected 'not a regular file' error, got: %v", err)
+	}
+}

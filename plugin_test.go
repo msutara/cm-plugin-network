@@ -62,14 +62,15 @@ func TestNetworkPlugin_Endpoints(t *testing.T) {
 	p := NewNetworkPlugin()
 	eps := p.Endpoints()
 
-	if len(eps) != 3 {
-		t.Fatalf("Endpoints: got %d, want 3", len(eps))
+	if len(eps) != 4 {
+		t.Fatalf("Endpoints: got %d, want 4", len(eps))
 	}
 
 	want := []struct{ method, path string }{
 		{http.MethodGet, "/interfaces"},
 		{http.MethodGet, "/status"},
 		{http.MethodGet, "/dns"},
+		{http.MethodDelete, "/interfaces/{name}"},
 	}
 	for i, w := range want {
 		if eps[i].Method != w.method || eps[i].Path != w.path {

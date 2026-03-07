@@ -52,26 +52,29 @@ plugin.Register(network.NewNetworkPlugin())
 All routes are relative to the plugin mount point
 (`/api/v1/plugins/network`).
 
-| Method | Path                | Description                        |
-| ------ | ------------------- | ---------------------------------- |
-| GET    | /interfaces         | List all network interfaces        |
-| GET    | /interfaces/{name}  | Get details for a single interface |
-| PUT    | /interfaces/{name}  | Set static IP for an interface     |
-| GET    | /dns                | Get current DNS configuration      |
-| PUT    | /dns                | Update DNS configuration           |
-| GET    | /status             | Show overall network status        |
+| Method | Path                          | Description                              |
+| ------ | ----------------------------- | ---------------------------------------- |
+| GET    | /interfaces                   | List all network interfaces              |
+| GET    | /interfaces/{name}            | Get details for a single interface       |
+| PUT    | /interfaces/{name}            | Set static IP for an interface           |
+| DELETE | /interfaces/{name}            | Remove static IP config (revert to DHCP) |
+| POST   | /interfaces/{name}/rollback   | Restore previous interface config (.bak) |
+| GET    | /dns                          | Get current DNS configuration            |
+| PUT    | /dns                          | Update DNS configuration                 |
+| POST   | /dns/rollback                 | Restore previous DNS config (.bak)       |
+| GET    | /status                       | Show overall network status              |
 
 ### Query Parameters
 
 | Parameter  | Applies To               | Description                                   |
 | ---------- | ------------------------ | --------------------------------------------- |
-| `dry_run`  | PUT /interfaces/{name}, PUT /dns | When `true`, validates and previews changes without applying them. Returns a `DryRunResult` with current vs proposed config and a change summary. |
+| `dry_run`  | PUT, DELETE, POST (mutating) | When `true`, validates and previews changes without applying them. Returns a `DryRunResult` with current vs proposed config and a change summary. |
 
 ### Required Headers
 
 | Header      | Applies To               | Description                                   |
 | ----------- | ------------------------ | --------------------------------------------- |
-| `X-Confirm` | PUT /interfaces/{name}, PUT /dns | Must be set to `true` for mutating operations. Without it, the server returns **428 Precondition Required** with a `dry_run` hint describing how to preview the proposed changes safely. This prevents accidental network disruption from scripts or UI bugs. |
+| `X-Confirm` | PUT, DELETE, POST (mutating) | Must be set to `true` for mutating operations. Without it, the server returns **428 Precondition Required** with a `dry_run` hint describing how to preview the proposed changes safely. This prevents accidental network disruption from scripts or UI bugs. |
 
 ---
 
@@ -95,6 +98,10 @@ All routes are relative to the plugin mount point
 - **Symlink-safe DNS writes** — if `/etc/resolv.conf` is a symlink (e.g.,
   to systemd-resolved), the write targets the resolved path to preserve
   the link.
+- **Safe file reads** — backup files are read through `safeReadFile` which
+  opens the file, verifies the file descriptor refers to a regular file
+  (not a directory, device, or FIFO), and reads through the same fd. This
+  eliminates TOCTOU races between validation and read.
 - **Command execution** — `ifdown`/`ifup` are invoked via absolute paths
   with separate per-command timeouts (default 30 s each) and no shell
   interpretation.
@@ -105,18 +112,35 @@ All routes are relative to the plugin mount point
 - **Rollback on failure** — before applying a new static IP configuration,
   the current config file is backed up. If `ifup` fails after writing the
   new config, the backup is automatically restored and `ifup` is retried
-  with the old configuration. On successful rollback, the backup file is
-  removed. If the restore itself fails, the backup file is **preserved** on
-  disk for manual recovery and the error includes the backup path. The same
-  backup/restore pattern applies to DNS writes.
-- **Dry-run support** — `PUT /interfaces/{name}?dry_run=true` and
-  `PUT /dns?dry_run=true` validate the request and return a preview of
-  what would change (current vs proposed config, human-readable diff)
-  without modifying any files or running any commands.
-- **Confirmation requirement** — mutating PUT operations require the
-  `X-Confirm: true` header. Without it, the server responds with
-  **428 Precondition Required** and a message describing the operation.
-  This prevents accidental network disruption from automated clients.
+  with the old configuration. The `.bak` file is **preserved** after
+  successful mutations so it remains available for explicit rollback. If
+  the restore itself fails, the backup file is preserved on disk for manual
+  recovery. The same backup/restore pattern applies to DNS writes.
+- **Explicit rollback** — `POST /interfaces/{name}/rollback` and
+  `POST /dns/rollback` restore the `.bak` backup file created by the most
+  recent mutating operation. Before restoring, the current config is backed
+  up to a `.pre-rollback` file. On success, the `.pre-rollback` file is
+  promoted to `.bak` so that rollback itself is reversible (a second
+  rollback reverses the first). **Limitation:** after a DELETE→rollback
+  cycle, the "no config" state has no `.bak` representation, so a second
+  rollback restores the same content (effectively a no-op). If rollback
+  `ifup` fails in the post-delete scenario, the `.bak` is renamed to
+  `.bak.failed` to prevent infinite retry loops.
+- **Delete static IP** — `DELETE /interfaces/{name}` removes the static
+  config file from `/etc/network/interfaces.d/` and runs `ifdown`/`ifup`
+  to revert the interface to DHCP. The deleted config is preserved as a
+  `.bak` file for rollback.
+- **Dry-run support** — `PUT /interfaces/{name}?dry_run=true`,
+  `PUT /dns?dry_run=true`, `DELETE /interfaces/{name}?dry_run=true`,
+  `POST /interfaces/{name}/rollback?dry_run=true`, and
+  `POST /dns/rollback?dry_run=true` validate the request and return a
+  preview of what would change (current vs proposed config, human-readable
+  diff) without modifying any files or running any commands.
+- **Confirmation requirement** — all mutating operations (PUT, DELETE, POST
+  rollback) require the `X-Confirm: true` header. Without it, the server
+  responds with **428 Precondition Required** and a message describing the
+  operation. This prevents accidental network disruption from automated
+  clients.
 
 ---
 

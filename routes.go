@@ -23,8 +23,11 @@ func newRouter(svc *Service) http.Handler {
 	r.Get("/interfaces", h.handleListInterfaces)
 	r.Get("/interfaces/{name}", h.handleGetInterface)
 	r.Put("/interfaces/{name}", h.handleSetStaticIP)
+	r.Delete("/interfaces/{name}", h.handleDeleteStaticIP)
+	r.Post("/interfaces/{name}/rollback", h.handleRollbackInterface)
 	r.Get("/dns", h.handleGetDNS)
 	r.Put("/dns", h.handleSetDNS)
+	r.Post("/dns/rollback", h.handleRollbackDNS)
 	r.Get("/status", h.handleGetNetworkStatus)
 
 	return r
@@ -108,6 +111,66 @@ func (h *handler) handleSetStaticIP(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, iface)
 }
 
+func (h *handler) handleDeleteStaticIP(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	if !validName.MatchString(name) {
+		writeError(w, http.StatusBadRequest, "invalid interface name")
+		return
+	}
+
+	if r.URL.Query().Get("dry_run") == "true" {
+		result, err := h.svc.DryRunDeleteStaticIP(name)
+		if err != nil {
+			writeDeleteError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
+
+	if r.Header.Get("X-Confirm") != "true" {
+		writePreconditionRequired(w)
+		return
+	}
+
+	iface, err := h.svc.DeleteStaticIP(name)
+	if err != nil {
+		writeDeleteError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, iface)
+}
+
+func (h *handler) handleRollbackInterface(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	if !validName.MatchString(name) {
+		writeError(w, http.StatusBadRequest, "invalid interface name")
+		return
+	}
+
+	if r.URL.Query().Get("dry_run") == "true" {
+		result, err := h.svc.DryRunRollbackInterface(name)
+		if err != nil {
+			writeRollbackError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
+
+	if r.Header.Get("X-Confirm") != "true" {
+		writePreconditionRequired(w)
+		return
+	}
+
+	iface, err := h.svc.RollbackInterface(name)
+	if err != nil {
+		writeRollbackError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, iface)
+}
+
 func (h *handler) handleGetDNS(w http.ResponseWriter, _ *http.Request) {
 	dns, err := h.svc.GetDNS()
 	if err != nil {
@@ -148,6 +211,30 @@ func (h *handler) handleSetDNS(w http.ResponseWriter, r *http.Request) {
 	dns, err := h.svc.SetDNS(req)
 	if err != nil {
 		writeDNSError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, dns)
+}
+
+func (h *handler) handleRollbackDNS(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("dry_run") == "true" {
+		result, err := h.svc.DryRunRollbackDNS()
+		if err != nil {
+			writeRollbackError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
+
+	if r.Header.Get("X-Confirm") != "true" {
+		writePreconditionRequired(w)
+		return
+	}
+
+	dns, err := h.svc.RollbackDNS()
+	if err != nil {
+		writeRollbackError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, dns)
@@ -200,7 +287,8 @@ func writeStaticIPError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
-	writeError(w, http.StatusInternalServerError, err.Error())
+	slog.Error("set static IP failed", "plugin", "network", "error", err)
+	writeError(w, http.StatusInternalServerError, "internal error during configuration")
 }
 
 func writeDNSError(w http.ResponseWriter, err error) {
@@ -212,7 +300,42 @@ func writeDNSError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeError(w, http.StatusInternalServerError, err.Error())
+	slog.Error("set DNS failed", "plugin", "network", "error", err)
+	writeError(w, http.StatusInternalServerError, "internal error during DNS configuration")
+}
+
+func writeDeleteError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errInvalidIfaceName) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, errIfaceNotFound) || errors.Is(err, errNoStaticConfig) {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if errors.Is(err, errNotLinux) {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	slog.Error("delete failed", "plugin", "network", "error", err)
+	writeError(w, http.StatusInternalServerError, "internal error during delete operation")
+}
+
+func writeRollbackError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errInvalidIfaceName) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, errIfaceNotFound) || errors.Is(err, errNoBackup) {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if errors.Is(err, errNotLinux) {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	slog.Error("rollback failed", "plugin", "network", "error", err)
+	writeError(w, http.StatusInternalServerError, "internal error during rollback operation")
 }
 
 func writeErrorWithDetails(w http.ResponseWriter, status int, message string, details map[string]any) {
