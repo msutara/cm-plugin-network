@@ -53,5 +53,6 @@ func (p *NetworkPlugin) Endpoints() []plugin.Endpoint {
 		{Method: http.MethodGet, Path: "/interfaces", Description: "Network interface details"},
 		{Method: http.MethodGet, Path: "/status", Description: "Connectivity and reachability status"},
 		{Method: http.MethodGet, Path: "/dns", Description: "DNS configuration"},
+		{Method: http.MethodDelete, Path: "/interfaces/{name}", Description: "Remove static IP config (revert to DHCP)"},
 	}
 }

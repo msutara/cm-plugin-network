@@ -3,6 +3,7 @@ package network
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -543,5 +544,432 @@ func TestPutDNS_NoConfirmHeader(t *testing.T) {
 	msg := extractErrorMessage(t, w.Body.Bytes())
 	if !strings.Contains(msg, "confirmation required") {
 		t.Errorf("expected error containing 'confirmation required', got %q", msg)
+	}
+}
+
+func TestDeleteInterface_DryRun(t *testing.T) {
+	dir := t.TempDir()
+	confPath := filepath.Join(dir, "eth0")
+	oldConfig := "auto eth0\niface eth0 inet static\n    address 10.0.0.1/24\n    gateway 10.0.0.254\n"
+	if err := os.WriteFile(confPath, []byte(oldConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := &Service{
+		interfacesDirPath: dir,
+		resolvPath:        filepath.Join(dir, "resolv.conf"),
+	}
+	router := newRouter(svc)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodDelete, "/interfaces/eth0?dry_run=true", nil)
+	router.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if result["valid"] != true {
+		t.Errorf("expected valid=true, got %v", result["valid"])
+	}
+	if result["current_config"] == nil || result["current_config"] == "" {
+		t.Error("expected non-empty current_config")
+	}
+	changes, ok := result["changes"].([]any)
+	if !ok || len(changes) == 0 {
+		t.Errorf("expected non-empty changes, got %v", result["changes"])
+	}
+
+	// Verify file was NOT removed.
+	if _, err := os.Stat(confPath); err != nil {
+		t.Errorf("dry-run should not remove file: %v", err)
+	}
+}
+
+func TestDeleteInterface_NoConfirmHeader(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodDelete, "/interfaces/eth0", nil)
+	testRouter().ServeHTTP(w, r)
+
+	if w.Code != http.StatusPreconditionRequired {
+		t.Fatalf("got %d, want %d", w.Code, http.StatusPreconditionRequired)
+	}
+
+	msg := extractErrorMessage(t, w.Body.Bytes())
+	if !strings.Contains(msg, "confirmation required") {
+		t.Errorf("expected error containing 'confirmation required', got %q", msg)
+	}
+}
+
+func TestDeleteInterface_NoStaticConfig(t *testing.T) {
+	dir := t.TempDir()
+	svc := &Service{
+		interfacesDirPath: dir,
+		resolvPath:        filepath.Join(dir, "resolv.conf"),
+	}
+	router := newRouter(svc)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodDelete, "/interfaces/eth0?dry_run=true", nil)
+	router.ServeHTTP(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("got %d, want %d; body: %s", w.Code, http.StatusNotFound, w.Body.String())
+	}
+}
+
+func TestDeleteInterface_InvalidName(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodDelete, "/interfaces/bad%20name", nil)
+	testRouter().ServeHTTP(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestRollbackInterface_DryRun(t *testing.T) {
+	dir := t.TempDir()
+	confPath := filepath.Join(dir, "eth0")
+	bakPath := confPath + ".bak"
+
+	current := "auto eth0\niface eth0 inet static\n    address 192.168.1.10/24\n    gateway 192.168.1.1\n"
+	backup := "auto eth0\niface eth0 inet static\n    address 10.0.0.1/24\n    gateway 10.0.0.254\n"
+	if err := os.WriteFile(confPath, []byte(current), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bakPath, []byte(backup), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := &Service{
+		interfacesDirPath: dir,
+		resolvPath:        filepath.Join(dir, "resolv.conf"),
+	}
+	router := newRouter(svc)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/interfaces/eth0/rollback?dry_run=true", nil)
+	router.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if result["valid"] != true {
+		t.Errorf("expected valid=true, got %v", result["valid"])
+	}
+	changes, ok := result["changes"].([]any)
+	if !ok || len(changes) == 0 {
+		t.Errorf("expected non-empty changes, got %v", result["changes"])
+	}
+	got, err := os.ReadFile(confPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != current {
+		t.Errorf("dry-run should not modify file")
+	}
+}
+
+func TestRollbackInterface_NoConfirmHeader(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/interfaces/eth0/rollback", nil)
+	testRouter().ServeHTTP(w, r)
+
+	if w.Code != http.StatusPreconditionRequired {
+		t.Fatalf("got %d, want %d", w.Code, http.StatusPreconditionRequired)
+	}
+
+	msg := extractErrorMessage(t, w.Body.Bytes())
+	if !strings.Contains(msg, "confirmation required") {
+		t.Errorf("expected error containing 'confirmation required', got %q", msg)
+	}
+}
+
+func TestRollbackInterface_NoBackup(t *testing.T) {
+	dir := t.TempDir()
+	svc := &Service{
+		interfacesDirPath: dir,
+		resolvPath:        filepath.Join(dir, "resolv.conf"),
+	}
+	router := newRouter(svc)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/interfaces/eth0/rollback?dry_run=true", nil)
+	router.ServeHTTP(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("got %d, want %d; body: %s", w.Code, http.StatusNotFound, w.Body.String())
+	}
+}
+
+func TestRollbackInterface_InvalidName(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/interfaces/bad%20name/rollback", nil)
+	testRouter().ServeHTTP(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestRollbackDNS_DryRun(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+	bakPath := resolvPath + ".bak"
+
+	current := "nameserver 8.8.8.8\n"
+	backup := "nameserver 1.1.1.1\n"
+	if err := os.WriteFile(resolvPath, []byte(current), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bakPath, []byte(backup), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := &Service{
+		interfacesDirPath: dir,
+		resolvPath:        resolvPath,
+	}
+	router := newRouter(svc)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/dns/rollback?dry_run=true", nil)
+	router.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if result["valid"] != true {
+		t.Errorf("expected valid=true, got %v", result["valid"])
+	}
+	changes, ok := result["changes"].([]any)
+	if !ok || len(changes) == 0 {
+		t.Errorf("expected non-empty changes, got %v", result["changes"])
+	}
+}
+
+func TestRollbackDNS_NoConfirmHeader(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/dns/rollback", nil)
+	testRouter().ServeHTTP(w, r)
+
+	if w.Code != http.StatusPreconditionRequired {
+		t.Fatalf("got %d, want %d", w.Code, http.StatusPreconditionRequired)
+	}
+
+	msg := extractErrorMessage(t, w.Body.Bytes())
+	if !strings.Contains(msg, "confirmation required") {
+		t.Errorf("expected error containing 'confirmation required', got %q", msg)
+	}
+}
+
+func TestRollbackDNS_NoBackup(t *testing.T) {
+	dir := t.TempDir()
+	svc := &Service{
+		interfacesDirPath: dir,
+		resolvPath:        filepath.Join(dir, "resolv.conf"),
+	}
+	router := newRouter(svc)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/dns/rollback?dry_run=true", nil)
+	router.ServeHTTP(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("got %d, want %d; body: %s", w.Code, http.StatusNotFound, w.Body.String())
+	}
+}
+
+// --- writeDeleteError / writeRollbackError tests ---
+
+func TestWriteDeleteError_InvalidName(t *testing.T) {
+	w := httptest.NewRecorder()
+	writeDeleteError(w, errInvalidIfaceName)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("got %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestWriteDeleteError_NotFound(t *testing.T) {
+	w := httptest.NewRecorder()
+	writeDeleteError(w, errIfaceNotFound)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("got %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestWriteDeleteError_NoStaticConfig(t *testing.T) {
+	w := httptest.NewRecorder()
+	writeDeleteError(w, errNoStaticConfig)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("got %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestWriteDeleteError_NotLinux(t *testing.T) {
+	w := httptest.NewRecorder()
+	writeDeleteError(w, errNotLinux)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("got %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestWriteDeleteError_InternalGeneric(t *testing.T) {
+	w := httptest.NewRecorder()
+	writeDeleteError(w, errors.New("restore read: /etc/network/interfaces.d/eth0.bak: permission denied"))
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("got %d, want %d", w.Code, http.StatusInternalServerError)
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "/etc") {
+		t.Errorf("500 response leaks internal path: %s", body)
+	}
+	if !strings.Contains(body, "internal error during delete operation") {
+		t.Errorf("expected generic message, got: %s", body)
+	}
+}
+
+func TestWriteRollbackError_InvalidName(t *testing.T) {
+	w := httptest.NewRecorder()
+	writeRollbackError(w, errInvalidIfaceName)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("got %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestWriteRollbackError_NoBackup(t *testing.T) {
+	w := httptest.NewRecorder()
+	writeRollbackError(w, errNoBackup)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("got %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestWriteRollbackError_NotLinux(t *testing.T) {
+	w := httptest.NewRecorder()
+	writeRollbackError(w, errNotLinux)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("got %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestWriteRollbackError_InternalGeneric(t *testing.T) {
+	w := httptest.NewRecorder()
+	writeRollbackError(w, errors.New("restore read: /var/tmp/resolv.conf.bak: not a regular file"))
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("got %d, want %d", w.Code, http.StatusInternalServerError)
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "/var") {
+		t.Errorf("500 response leaks internal path: %s", body)
+	}
+	if !strings.Contains(body, "internal error during rollback operation") {
+		t.Errorf("expected generic message, got: %s", body)
+	}
+}
+
+// --- Confirmed handler 503 tests (non-Linux) ---
+
+func TestDeleteInterface_Confirmed_NonLinux(t *testing.T) {
+	if runtime.GOOS == "linux" {
+		t.Skip("test requires non-Linux OS")
+	}
+	dir := t.TempDir()
+	svc := &Service{interfacesDirPath: dir}
+	router := newRouter(svc)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodDelete, "/interfaces/eth0", nil)
+	r.Header.Set("X-Confirm", "true")
+	router.ServeHTTP(w, r)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("got %d, want %d; body: %s", w.Code, http.StatusServiceUnavailable, w.Body.String())
+	}
+}
+
+func TestRollbackInterface_Confirmed_NonLinux(t *testing.T) {
+	if runtime.GOOS == "linux" {
+		t.Skip("test requires non-Linux OS")
+	}
+	dir := t.TempDir()
+	svc := &Service{interfacesDirPath: dir}
+	router := newRouter(svc)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/interfaces/eth0/rollback", nil)
+	r.Header.Set("X-Confirm", "true")
+	router.ServeHTTP(w, r)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("got %d, want %d; body: %s", w.Code, http.StatusServiceUnavailable, w.Body.String())
+	}
+}
+
+func TestRollbackDNS_Confirmed_NonLinux(t *testing.T) {
+	if runtime.GOOS == "linux" {
+		t.Skip("test requires non-Linux OS")
+	}
+	dir := t.TempDir()
+	svc := &Service{
+		interfacesDirPath: dir,
+		resolvPath:        filepath.Join(dir, "resolv.conf"),
+	}
+	router := newRouter(svc)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/dns/rollback", nil)
+	r.Header.Set("X-Confirm", "true")
+	router.ServeHTTP(w, r)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("got %d, want %d; body: %s", w.Code, http.StatusServiceUnavailable, w.Body.String())
+	}
+}
+
+// --- Pre-existing error mapper 500 tests ---
+
+func TestWriteStaticIPError_InternalGeneric(t *testing.T) {
+	w := httptest.NewRecorder()
+	writeStaticIPError(w, errors.New("ifup eth0 failed: exit status 1: /etc/network/run/ifstate"))
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("got %d, want %d", w.Code, http.StatusInternalServerError)
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "/etc") {
+		t.Errorf("500 response leaks internal path: %s", body)
+	}
+	if !strings.Contains(body, "internal error during configuration") {
+		t.Errorf("expected generic message, got: %s", body)
+	}
+}
+
+func TestWriteDNSError_InternalGeneric(t *testing.T) {
+	w := httptest.NewRecorder()
+	writeDNSError(w, errors.New("write resolv.conf: /etc/resolv.conf: permission denied"))
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("got %d, want %d", w.Code, http.StatusInternalServerError)
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "/etc") {
+		t.Errorf("500 response leaks internal path: %s", body)
+	}
+	if !strings.Contains(body, "internal error during DNS configuration") {
+		t.Errorf("expected generic message, got: %s", body)
 	}
 }
