@@ -272,6 +272,10 @@ func writeError(w http.ResponseWriter, status int, message string) {
 }
 
 func writeStaticIPError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errInterfaceDenied) {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
 	if errors.Is(err, errInvalidCIDR) || errors.Is(err, errInvalidGW) ||
 		errors.Is(err, errEmptyIP) || errors.Is(err, errEmptyGateway) ||
 		errors.Is(err, errIPv6NotSupported) || errors.Is(err, errGWNotInSubnet) ||
@@ -305,6 +309,10 @@ func writeDNSError(w http.ResponseWriter, err error) {
 }
 
 func writeDeleteError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errInterfaceDenied) {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
 	if errors.Is(err, errInvalidIfaceName) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -322,6 +330,10 @@ func writeDeleteError(w http.ResponseWriter, err error) {
 }
 
 func writeRollbackError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errInterfaceDenied) {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
 	if errors.Is(err, errInvalidIfaceName) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

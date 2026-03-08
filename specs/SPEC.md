@@ -146,5 +146,70 @@ All routes are relative to the plugin mount point
 
 ## 7. Configuration
 
-The network plugin currently has no plugin-specific configuration.
 Global CM settings (port, auth) apply as usual via `/etc/cm/config.yaml`.
+
+### Interface Write Policy
+
+Interface write operations on `/interfaces` routes (PUT, DELETE, POST
+rollback) can be restricted to specific interfaces via configuration.
+The plugin implements `plugin.Configurable` so the policy can be set at
+startup and updated at runtime. This policy does not apply to DNS routes
+(`/dns`, `/dns/rollback`).
+
+Add to `config.yaml` under the network plugin section:
+
+```yaml
+plugins:
+  network:
+    interface_policy:
+      mode: "denylist"
+      list:
+        - "lo"
+        - "gre0"
+        - "gretap0"
+        - "sit0"
+        - "ip6tnl0"
+        - "docker*"
+        - "veth*"
+```
+
+#### Modes
+
+| Mode | Behavior |
+| --- | --- |
+| `denylist` (default) | All interfaces writable EXCEPT those matching patterns |
+| `allowlist` | ONLY interfaces matching patterns are writable |
+| `""` (explicit empty) | Policy disabled — all interfaces writable |
+
+> **Note:** When no `interface_policy` configuration is provided at all, the default
+> denylist is active (blocking `lo`, `gre0`, etc.). Setting `mode: ""` explicitly
+> disables the policy — these are distinct behaviors.
+
+#### Pattern Syntax
+
+Patterns use `filepath.Match` glob semantics:
+
+- `*` matches any sequence of characters
+- `?` matches a single character
+- `[abc]` matches one of the listed characters
+
+#### Default Denylist
+
+When no configuration is provided, the default denylist blocks:
+`lo`, `gre0`, `gretap0`, `sit0`, `ip6tnl0`.
+
+#### Error Response
+
+When a write targets a denied interface, the API responds with HTTP 403 Forbidden:
+
+```json
+{
+  "error": {
+    "code": 403,
+    "message": "interface 'eth0p' is not allowed for write operations",
+    "details": {}
+  }
+}
+```
+
+GET operations are never restricted.
