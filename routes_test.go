@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -971,5 +972,93 @@ func TestWriteDNSError_InternalGeneric(t *testing.T) {
 	}
 	if !strings.Contains(body, "internal error during DNS configuration") {
 		t.Errorf("expected generic message, got: %s", body)
+	}
+}
+
+func TestHandler_DeniedInterface_Returns403(t *testing.T) {
+	// Create a service with denylist blocking "eth0p"
+	svc := &Service{
+		policy:            NewInterfacePolicy("denylist", []string{"eth0p"}),
+		resolvPath:        filepath.Join(t.TempDir(), "resolv.conf"),
+		interfacesDirPath: t.TempDir(),
+		cmdTimeout:        defaultCmdTimeout,
+	}
+	router := newRouter(svc)
+
+	endpoints := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPut, "/interfaces/eth0p"},
+		{http.MethodDelete, "/interfaces/eth0p"},
+		{http.MethodPost, "/interfaces/eth0p/rollback"},
+	}
+
+	for _, ep := range endpoints {
+		var body io.Reader
+		if ep.method == http.MethodPut {
+			body = strings.NewReader(`{"ip":"192.168.1.10/24","gateway":"192.168.1.1"}`)
+		}
+		req := httptest.NewRequest(ep.method, ep.path, body)
+		req.Header.Set("X-Confirm", "true")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusForbidden {
+			t.Errorf("%s %s: got %d, want 403", ep.method, ep.path, w.Code)
+		}
+		if !strings.Contains(w.Body.String(), "not allowed for write operations") {
+			t.Errorf("%s %s: body %q should mention policy denial", ep.method, ep.path, w.Body.String())
+		}
+	}
+}
+
+func TestHandler_DeniedInterface_DryRun_Also403(t *testing.T) {
+	svc := &Service{
+		policy:            NewInterfacePolicy("denylist", []string{"eth0p"}),
+		resolvPath:        filepath.Join(t.TempDir(), "resolv.conf"),
+		interfacesDirPath: t.TempDir(),
+		cmdTimeout:        defaultCmdTimeout,
+	}
+	router := newRouter(svc)
+
+	endpoints := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPut, "/interfaces/eth0p?dry_run=true"},
+		{http.MethodDelete, "/interfaces/eth0p?dry_run=true"},
+		{http.MethodPost, "/interfaces/eth0p/rollback?dry_run=true"},
+	}
+
+	for _, ep := range endpoints {
+		var body io.Reader
+		if ep.method == http.MethodPut {
+			body = strings.NewReader(`{"ip":"192.168.1.10/24","gateway":"192.168.1.1"}`)
+		}
+		req := httptest.NewRequest(ep.method, ep.path, body)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusForbidden {
+			t.Errorf("%s %s: got %d, want 403", ep.method, ep.path, w.Code)
+		}
+	}
+}
+
+func TestHandler_GETNotAffectedByPolicy(t *testing.T) {
+	// Even with aggressive denylist, GET operations work
+	svc := &Service{
+		policy:            NewInterfacePolicy("denylist", []string{"*"}), // deny all writes
+		resolvPath:        filepath.Join(t.TempDir(), "resolv.conf"),
+		interfacesDirPath: t.TempDir(),
+		cmdTimeout:        defaultCmdTimeout,
+	}
+	router := newRouter(svc)
+
+	// GET /interfaces should still work (returns empty list, with 200 OK)
+	req := httptest.NewRequest(http.MethodGet, "/interfaces", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("GET /interfaces: got status %d, want %d", w.Code, http.StatusOK)
 	}
 }

@@ -83,6 +83,8 @@ var (
 type Service struct {
 	mu sync.RWMutex
 
+	policy *InterfacePolicy
+
 	// resolvPath is overridable for testing.
 	resolvPath string
 	// interfacesDirPath is overridable for testing.
@@ -232,10 +234,21 @@ func validateStaticIPRequest(req *StaticIPRequest) error {
 	return nil
 }
 
+// checkWritePolicy returns an error if the interface is denied by policy.
+func (s *Service) checkWritePolicy(name string) error {
+	if s.policy != nil && !s.policy.IsWriteAllowed(name) {
+		return &InterfaceDeniedError{Name: name}
+	}
+	return nil
+}
+
 // SetStaticIP configures a static IP address on the named interface.
 // On Linux, it atomically writes to /etc/network/interfaces.d/{name}
 // and restarts the interface with ifdown/ifup using a timeout.
 func (s *Service) SetStaticIP(name string, req StaticIPRequest) (*Interface, error) {
+	if err := s.checkWritePolicy(name); err != nil {
+		return nil, err
+	}
 	if err := validateStaticIPRequest(&req); err != nil {
 		return nil, err
 	}
@@ -327,6 +340,9 @@ func (s *Service) SetStaticIP(name string, req StaticIPRequest) (*Interface, err
 // DeleteStaticIP removes the static IP configuration for an interface,
 // reverting it to DHCP. The existing config is backed up before removal.
 func (s *Service) DeleteStaticIP(name string) (*Interface, error) {
+	if err := s.checkWritePolicy(name); err != nil {
+		return nil, err
+	}
 	if runtime.GOOS != "linux" {
 		return nil, errNotLinux
 	}
@@ -385,6 +401,9 @@ func (s *Service) DeleteStaticIP(name string) (*Interface, error) {
 
 // DryRunDeleteStaticIP previews what would change if the static config were removed.
 func (s *Service) DryRunDeleteStaticIP(name string) (*DryRunResult, error) {
+	if err := s.checkWritePolicy(name); err != nil {
+		return nil, err
+	}
 	if !validIfaceName.MatchString(name) {
 		return nil, errInvalidIfaceName
 	}
@@ -415,6 +434,9 @@ func (s *Service) DryRunDeleteStaticIP(name string) (*DryRunResult, error) {
 // pre-rollback snapshot is promoted to .bak so the rollback itself can
 // be reversed.
 func (s *Service) RollbackInterface(name string) (*Interface, error) {
+	if err := s.checkWritePolicy(name); err != nil {
+		return nil, err
+	}
 	if runtime.GOOS != "linux" {
 		return nil, errNotLinux
 	}
@@ -511,6 +533,9 @@ func (s *Service) RollbackInterface(name string) (*Interface, error) {
 
 // DryRunRollbackInterface previews what would change if the .bak config were restored.
 func (s *Service) DryRunRollbackInterface(name string) (*DryRunResult, error) {
+	if err := s.checkWritePolicy(name); err != nil {
+		return nil, err
+	}
 	if !validIfaceName.MatchString(name) {
 		return nil, errInvalidIfaceName
 	}
@@ -690,6 +715,9 @@ func (s *Service) GetNetworkStatus() (*NetworkStatus, error) {
 // DryRunStaticIP validates a static IP request and returns what would change
 // without writing any files or restarting the interface.
 func (s *Service) DryRunStaticIP(ifaceName string, req StaticIPRequest) (*DryRunResult, error) {
+	if err := s.checkWritePolicy(ifaceName); err != nil {
+		return nil, err
+	}
 	if err := validateStaticIPRequest(&req); err != nil {
 		return nil, err
 	}

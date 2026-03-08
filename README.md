@@ -17,6 +17,8 @@ headless Debian-based nodes (Raspbian Bookworm ARM64, Debian Bullseye slim).
 - Dry-run preview mode for safe change review
 - Confirmation header requirement to prevent accidental changes
 - Automatic rollback on interface activation failure
+- Interface write policy (allowlist/denylist) for protecting critical interfaces
+- Configurable at startup and runtime via `plugin.Configurable`
 
 ## Safety Features
 
