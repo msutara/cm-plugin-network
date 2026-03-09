@@ -15,15 +15,11 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
-    env:
-      GOPRIVATE: "github.com/msutara/*"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
-      - name: Configure private module access
-        run: git config --global url."https://x-access-token:${{ secrets.GH_PAT }}@github.com/msutara/".insteadOf "https://github.com/msutara/"
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
@@ -31,14 +27,10 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    env:
-      GOPRIVATE: "github.com/msutara/*"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
-      - name: Configure private module access
-        run: git config --global url."https://x-access-token:${{ secrets.GH_PAT }}@github.com/msutara/".insteadOf "https://github.com/msutara/"
       - name: Run tests
         run: go test ./...
