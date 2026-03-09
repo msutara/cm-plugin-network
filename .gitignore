@@ -1,2 +1,6 @@
 cover
 coverage
+
+# Go workspace (local dev only)
+go.work
+go.work.sum
