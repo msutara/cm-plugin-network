@@ -69,7 +69,7 @@ func (p *NetworkPlugin) Endpoints() []plugin.Endpoint {
 		{Method: http.MethodDelete, Path: "/interfaces/{name}", Description: "Remove static IP (revert to DHCP)"},
 		{Method: http.MethodPost, Path: "/interfaces/{name}/rollback", Description: "Rollback interface to previous config"},
 		{Method: http.MethodGet, Path: "/dns", Description: "Get DNS configuration"},
-		{Method: http.MethodPut, Path: "/dns", Description: "Set DNS servers"},
+		{Method: http.MethodPut, Path: "/dns", Description: "Set DNS configuration (nameservers and search domains)"},
 		{Method: http.MethodPost, Path: "/dns/rollback", Description: "Rollback DNS to previous config"},
 		{Method: http.MethodGet, Path: "/status", Description: "Connectivity and reachability status"},
 	}
