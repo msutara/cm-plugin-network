@@ -38,7 +38,7 @@ func (p *NetworkPlugin) Name() string {
 }
 
 func (p *NetworkPlugin) Version() string {
-	return "0.1.0"
+	return "0.4.3"
 }
 
 func (p *NetworkPlugin) Description() string {
@@ -63,10 +63,15 @@ func (p *NetworkPlugin) ScheduledJobs() []plugin.JobDefinition {
 
 func (p *NetworkPlugin) Endpoints() []plugin.Endpoint {
 	return []plugin.Endpoint{
-		{Method: http.MethodGet, Path: "/interfaces", Description: "Network interface details"},
+		{Method: http.MethodGet, Path: "/interfaces", Description: "List all network interfaces"},
+		{Method: http.MethodGet, Path: "/interfaces/{name}", Description: "Get interface details"},
+		{Method: http.MethodPut, Path: "/interfaces/{name}", Description: "Set static IP configuration"},
+		{Method: http.MethodDelete, Path: "/interfaces/{name}", Description: "Remove static IP (revert to DHCP)"},
+		{Method: http.MethodPost, Path: "/interfaces/{name}/rollback", Description: "Rollback interface to previous config"},
+		{Method: http.MethodGet, Path: "/dns", Description: "Get DNS configuration"},
+		{Method: http.MethodPut, Path: "/dns", Description: "Set DNS configuration (nameservers and search domains)"},
+		{Method: http.MethodPost, Path: "/dns/rollback", Description: "Rollback DNS to previous config"},
 		{Method: http.MethodGet, Path: "/status", Description: "Connectivity and reachability status"},
-		{Method: http.MethodGet, Path: "/dns", Description: "DNS configuration"},
-		{Method: http.MethodDelete, Path: "/interfaces/{name}", Description: "Remove static IP config (revert to DHCP)"},
 	}
 }
 
