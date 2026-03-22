@@ -17,6 +17,9 @@ var _ plugin.Plugin = (*NetworkPlugin)(nil)
 // Compile-time check: NetworkPlugin must implement plugin.Configurable.
 var _ plugin.Configurable = (*NetworkPlugin)(nil)
 
+// version is set at build time via ldflags in the core binary build.
+var version = "dev"
+
 // NetworkPlugin implements the core plugin.Plugin interface for network management.
 type NetworkPlugin struct {
 	svc     *Service
@@ -38,7 +41,7 @@ func (p *NetworkPlugin) Name() string {
 }
 
 func (p *NetworkPlugin) Version() string {
-	return "0.4.3"
+	return version
 }
 
 func (p *NetworkPlugin) Description() string {
